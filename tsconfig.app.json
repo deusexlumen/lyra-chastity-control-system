@@ -31,5 +31,5 @@
     "noUncheckedSideEffectImports": true
   },
   "include": ["src"],
-  "exclude": ["src/lib/stateManager.ts"]
+  "exclude": ["src/lib/stateManager.ts", "src/lib/moduleLoader.ts"]
 }

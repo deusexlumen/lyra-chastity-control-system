@@ -13,5 +13,5 @@
     "allowImportingTsExtensions": false,
     "types": ["node"]
   },
-  "include": ["server.ts", "sessionEngine.ts", "src/lib/stateManager.ts", "src/types/engine.ts"]
+  "include": ["server.ts", "sessionEngine.ts", "src/lib/stateManager.ts", "src/lib/moduleLoader.ts", "src/types/engine.ts"]
 }
