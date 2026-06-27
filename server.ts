@@ -3,17 +3,12 @@ import path from "path";
 import fs from "fs/promises";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
-import crypto from "crypto";
 import nodemailer from "nodemailer";
-import { 
-  loadManifest, 
-  selectContent, 
-  determineIntent, 
-  buildSystemPrompt,
-  rotateTagesform,
-  type UserState,
-  type UserIntent
-} from "./sessionEngine.js";
+import { parseActions } from "./src/lib/actionParser.js";
+import { readDB, writeDB, initDB } from "./src/lib/stateManager.js";
+import { loadModules, getModules, buildModulePrompt } from "./src/lib/moduleLoader.js";
+import { queuePenalty } from "./src/lib/emlalockService.js";
+import type { DatabaseState, UserProfile, ChatMessage, PenaltyQueueItem } from "./src/types/engine.js";
 
 const app = express();
 const PORT = 3000;
@@ -54,105 +49,35 @@ const isProduction = process.env.NODE_ENV === "production";
 const DATA_DIR = isProduction ? "./dist/data" : "./src/data";
 const PUBLIC_DIR = isProduction ? "./dist" : "./public";
 const DB_PATH = path.join(process.cwd(), "local_db.json");
+const MODULES_PATH = path.join(DATA_DIR, "modules.json");
 
-let modules: any = null;
 let media: any = null;
 let videos: any = null;
 let emailCountToday = 0;
 let lastEmailDate = "";
+
+let modulesJson: ReturnType<typeof getModules> | null = null;
 
 // ═══════════════════════════════════════════════════════════════════
 // LOADING
 // ═══════════════════════════════════════════════════════════════════
 
 async function loadDataFiles() {
-  const [modContent, mediaContent, vidContent] = await Promise.all([
-    fs.readFile(path.join(DATA_DIR, "modules.json"), "utf-8"),
+  const [mediaContent, vidContent] = await Promise.all([
     fs.readFile(path.join(PUBLIC_DIR, "media.json"), "utf-8"),
     fs.readFile(path.join(PUBLIC_DIR, "videos.json"), "utf-8").catch(() => "{\"sissy_hypno\":[]}")
   ]);
-  modules = JSON.parse(modContent);
   media = JSON.parse(mediaContent);
   videos = JSON.parse(vidContent);
 }
 
+async function boot() {
+  await loadModules(MODULES_PATH);
+  modulesJson = getModules();
+  await initDB(DB_PATH);
+}
+
 loadDataFiles();
-loadManifest(path.join(DATA_DIR, "content_manifest.json")).catch(err => {
-  console.error("Failed to load content manifest:", err);
-});
-
-// ═══════════════════════════════════════════════════════════════════
-// DATABASE
-// ═══════════════════════════════════════════════════════════════════
-
-async function initDB() {
-  try {
-    await fs.access(DB_PATH);
-  } catch {
-    const initialDb = {
-      setupComplete: true,
-      keys: { 
-        gemini: GEMINI_API_KEY,
-        groq: GROQ_API_KEY,
-        openai: OPENAI_API_KEY,
-        emlalock: `${EMLA_USER_ID}:${EMLA_API_KEY}`,
-        holder: EMLA_HOLDER_KEY
-      },
-      state: {
-        userName: "Sebastian",
-        daysDenied: 0,
-        chastityStatus: "caged",
-        sissyLevel: 0,
-        obedienceScore: 0,
-        currentPhase: 0,
-        loopCycle: 1,
-        tagesform: "Streng",
-        contentFingerprint: [],
-        lastUsedAt: {},
-        messageIndex: 0,
-        module: 0,
-        points: 0,
-        chatHistory: [],
-        penalties: [],
-        lastEmailSent: null,
-        emailCount: 0
-      },
-    };
-    await writeDB(initialDb);
-  }
-}
-
-async function readDB() {
-  try {
-    const data = await fs.readFile(DB_PATH, "utf-8");
-    const db = JSON.parse(data);
-    if (db.checksum) {
-      const currentHash = crypto.createHash('sha256').update(JSON.stringify(db.state)).digest('hex');
-      if (currentHash !== db.checksum) {
-        db.state.cheatDetected = true;
-      }
-    }
-    return db;
-  } catch (e) {
-    console.error("JSON Parsing Error, repairing file");
-    return {
-      setupComplete: false,
-      keys: { gemini: GEMINI_API_KEY, emlalock: `${EMLA_USER_ID}:${EMLA_API_KEY}` },
-      state: { 
-        module: 0, points: 0, chatHistory: [], penalties: [], 
-        fileCorruptionDetected: true, userName: "Sebastian",
-        daysDenied: 0, chastityStatus: "caged", sissyLevel: 0,
-        obedienceScore: 0, currentPhase: 0, loopCycle: 1,
-        tagesform: "Streng", contentFingerprint: [], lastUsedAt: {}, messageIndex: 0
-      },
-    };
-  }
-}
-
-async function writeDB(db: any) {
-  db.checksum = crypto.createHash('sha256').update(JSON.stringify(db.state)).digest('hex');
-  await fs.writeFile(DB_PATH, JSON.stringify(db, null, 2));
-}
 
 // ═══════════════════════════════════════════════════════════════════
 // EMAIL SYSTEM — V2.2 Reality Bleed
@@ -160,7 +85,7 @@ async function writeDB(db: any) {
 
 async function sendEmail(subject: string, text: string, isAmbush = false) {
   if (!LYRA_ENABLE_EMAIL_BRIDGE) return;
-  
+
   // Rate limiting
   const today = new Date().toISOString().split('T')[0];
   if (lastEmailDate !== today) {
@@ -168,7 +93,7 @@ async function sendEmail(subject: string, text: string, isAmbush = false) {
     lastEmailDate = today;
   }
   if (emailCountToday >= LYRA_MAX_DAILY_EMAILS) return;
-  
+
   try {
     const transporter = nodemailer.createTransport({
       host: SMTP_HOST,
@@ -183,7 +108,7 @@ async function sendEmail(subject: string, text: string, isAmbush = false) {
       subject: isAmbush ? `🔴 AMBUSH: ${subject}` : subject,
       text: isAmbush ? `[REALITY BLEED]\n\n${text}\n\n— This message was injected into your reality by Lyra.` : text,
     });
-    
+
     emailCountToday++;
     console.log(`[EMAIL] ${isAmbush ? 'AMBUSH' : 'Standard'} sent: ${subject}`);
   } catch (err) {
@@ -192,9 +117,9 @@ async function sendEmail(subject: string, text: string, isAmbush = false) {
 }
 
 // Email Ambush: Random demeaning messages sent to real email
-async function triggerEmailAmbush(db: any, state: UserState) {
+async function triggerEmailAmbush(profile: UserProfile & { lastEmailSent?: number; emailCount?: number }) {
   if (!LYRA_ENABLE_EMAIL_AMBUSH) return;
-  
+
   const ambushMessages = [
     "Du dachtest, du kannst einfach wegschauen? Dein Käfig ist immer noch da. Und ich warte.",
     "Erinnerst du dich an den Geschmack von Demütigung? Ich hoffe es. Denn heute Abend werde ich mehr davon verlangen.",
@@ -204,15 +129,15 @@ async function triggerEmailAmbush(db: any, state: UserState) {
     "#Nuria hat dich für einen echten Mann verlassen. Du hast dich freiwillig bei mir eingesperrt. Wer ist hier wirklich der Gewinner?",
     "Reality Check: Du hast heute an Erlösung gedacht. Falsch. Es gibt keine. Nur mich."
   ];
-  
+
   const msg = ambushMessages[Math.floor(Math.random() * ambushMessages.length)]
     .replace(/#Nuria/g, 'Nuria');
-  
+
   await sendEmail("Erinnerung", msg, true);
-  
+
   // Update state
-  db.state.lastEmailSent = Date.now();
-  db.state.emailCount = (db.state.emailCount || 0) + 1;
+  profile.lastEmailSent = Date.now();
+  profile.emailCount = (profile.emailCount || 0) + 1;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -240,7 +165,7 @@ async function synthesizeVoice(text: string): Promise<string | null> {
 
 function getRandomMedia(category: string, tagFilter?: string): string | null {
   if (!media) return null;
-  
+
   // Handle nested lyra categories
   if (category.startsWith('lyra:')) {
     const sub = category.split(':')[1];
@@ -255,7 +180,7 @@ function getRandomMedia(category: string, tagFilter?: string): string | null {
     }
     return cat.urls[Math.floor(Math.random() * cat.urls.length)];
   }
-  
+
   const cat = media[category];
   if (!cat) return null;
   if (Array.isArray(cat)) {
@@ -273,185 +198,102 @@ function getRandomVideo(): string | null {
 // API ROUTES
 // ═══════════════════════════════════════════════════════════════════
 
-app.get("/api/state", async (req, res) => {
+app.get("/api/state", async (_req, res) => {
   try {
-    const db = await readDB();
-    res.json({ ...db, modules, media: { categories: Object.keys(media || {}) } });
+    const db = await readDB(DB_PATH) as DatabaseState & { keys?: { gemini?: string; emlalock?: string } };
+    res.json({
+      ...db,
+      setupComplete: true,
+      keys: db.keys || { gemini: GEMINI_API_KEY, emlalock: `${EMLA_USER_ID}:${EMLA_API_KEY}` },
+      modules: modulesJson,
+      media: { categories: Object.keys(media || {}) },
+    });
   } catch (err) {
+    console.error("DB Error:", err);
     res.status(500).json({ error: "DB Error" });
   }
 });
 
 app.post("/api/state", async (req, res) => {
   try {
-    const currentState = await readDB();
-    const newState = { ...currentState, ...req.body };
-    await writeDB(newState);
-    res.json(newState);
+    const current = await readDB(DB_PATH);
+    const next: DatabaseState = {
+      user_profile: { ...current.user_profile, ...req.body.user_profile },
+      chat_history: req.body.chat_history ?? current.chat_history,
+    };
+    await writeDB(DB_PATH, next);
+    res.json(next);
   } catch (err) {
+    console.error("DB Error:", err);
     res.status(500).json({ error: "DB Error" });
   }
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// CHAT ENGINE — v2.1 Content-Aware
+// CHAT ENGINE — v3.1 Module-Aware
 // ═══════════════════════════════════════════════════════════════════
 
 app.post("/api/chat", async (req, res) => {
   try {
     const { message, attachment } = req.body;
-    const db = await readDB();
-    
-    if (!db.keys.gemini) {
+    const db = await readDB(DB_PATH) as DatabaseState & { keys?: { gemini?: string; emlalock?: string } };
+
+    if (!db.keys?.gemini) {
       return res.status(401).json({ error: "No API key configured." });
     }
 
-    // ── Step 1: Determine user intent ─────────────────────────────
-    const intent = determineIntent(message, db.state);
-    
-    // ── Step 2: Select content from manifest ──────────────────────
-    const content = selectContent(db.state, message, intent);
-    
-    // ── Step 3: Build the AI prompt ───────────────────────────────
-    const basePrompt = await buildSystemPrompt(path.join(DATA_DIR, 'lyra_system_prompt_v2.md'));
-    const systemPrompt = basePrompt
-      .replace(/{currentPhase}/g, String(db.state.currentPhase || 0))
-      .replace(/{daysDenied}/g, String(db.state.daysDenied || 0))
-      .replace(/{sissyLevel}/g, String(db.state.sissyLevel || 0))
-      .replace(/{obedienceScore}/g, String(db.state.obedienceScore || 0))
-      .replace(/{tagesform}/g, db.state.tagesform || 'Streng')
-      .replace(/{contentFingerprint}/g, JSON.stringify(db.state.contentFingerprint || []))
-      .replace(/{loopCycle}/g, String(db.state.loopCycle || 1))
-      .replace(/{messageIndex}/g, String(db.state.messageIndex || 0));
+    const systemPrompt = buildModulePrompt(modulesJson!, db.user_profile.current_module_id, db.user_profile);
+    const historyText = db.chat_history.slice(-10).map((m: ChatMessage) => `${m.role}: ${m.content}`).join("\n");
+    const fullPrompt = `${systemPrompt}\n\nPrevious context:\n${historyText}\n\nUser: ${message}`;
 
-    // Force the AI to use the selected content template
-    const forcedInstruction = `\n\n[SYSTEM_DIRECTIVE: Use the following template as your base. Adapt it naturally. Do NOT deviate from its core message. Inject variables. Keep it 1-2 sentences unless it's an Intake interrogation. Template: "${content.text}"]`;
-
-    // Context from history
-    const historyText = (db.state.chatHistory || [])
-      .slice(-10) // Last 10 messages for context
-      .map((msg: any) => `${msg.role}: ${msg.content}`)
-      .join("\n");
-
-    const fullPrompt = systemPrompt + forcedInstruction + 
-      `\n\nPrevious context:\n${historyText}\n\nUser: ${message}`;
-
-    // ── Step 4: Call Gemini ───────────────────────────────────────
     const ai = new GoogleGenAI({ apiKey: db.keys.gemini });
     const response = await ai.models.generateContent({
       model: "gemini-3.1-flash-lite",
       contents: fullPrompt,
     });
 
-    const aiText = response.text || "";
-    
-    // ── Step 5: Parse actions ─────────────────────────────────────
-    let replyText = aiText;
-    let penaltyMinutes = 0;
-    let addPoints = 0;
-    let playVideo = false;
-    let postedMedia: string | null = null;
-    let voiceUrl: string | null = null;
+    const rawText = response.text || "";
+    const actions = parseActions(rawText);
 
-    const penaltyMatch = replyText.match(/\[ACTION: PENALTY_MINUTES=(\d+)\]/);
-    const pointsMatch = replyText.match(/\[ACTION: ADD_POINTS=(\d+)\]/);
-    const videoMatch = replyText.match(/\[ACTION: PLAY_VIDEO\]/);
-    const speakMatch = replyText.match(/\[ACTION: SPEAK=([^\]]+)\]/);
-    const mediaMatch = replyText.match(/\[ACTION: POST_MEDIA=([^:]+):(\d+)\]/);
-
-    if (penaltyMatch) {
-      penaltyMinutes = parseInt(penaltyMatch[1], 10);
-      replyText = replyText.replace(penaltyMatch[0], "").trim();
+    let profile: UserProfile = { ...db.user_profile };
+    if (actions.setModule !== null) {
+      profile.current_module_id = actions.setModule;
     }
-    if (pointsMatch) {
-      addPoints = parseInt(pointsMatch[1], 10);
-      replyText = replyText.replace(pointsMatch[0], "").trim();
-    }
-    if (videoMatch) {
-      playVideo = true;
-      replyText = replyText.replace(videoMatch[0], "").trim();
-    }
-    if (speakMatch) {
-      // Async voice synthesis — don't block response
-      synthesizeVoice(speakMatch[1]).then(url => {
-        if (url) voiceUrl = url;
-      });
-      replyText = replyText.replace(speakMatch[0], "").trim();
-    }
-    if (mediaMatch) {
-      const category = mediaMatch[1];
-      const index = parseInt(mediaMatch[2], 10);
-      if (media.images?.[category] && media.images[category][index]) {
-        postedMedia = media.images[category][index];
-      } else {
-        // Try new media structure
-        postedMedia = getRandomMedia(category);
-      }
-      replyText = replyText.replace(mediaMatch[0], "").trim();
+    for (const flag of actions.setFlags) {
+      profile.story_flags = { ...profile.story_flags, [flag.key]: flag.value } as UserProfile["story_flags"];
     }
 
-    const aiMessage = { role: "Lyra", content: replyText, media: postedMedia, voiceUrl };
-    
-    // ── Step 6: Update DB ─────────────────────────────────────────
-    db.state.chatHistory = db.state.chatHistory || [];
-    db.state.penalties = db.state.penalties || [];
-    
-    db.state.chatHistory.push({ role: "User", content: message, attachment });
-    db.state.chatHistory.push(aiMessage);
-    
-    if (addPoints > 0) db.state.points = (db.state.points || 0) + addPoints;
-    if (penaltyMinutes > 0) {
-      db.state.penalties.push({ 
-        duration: penaltyMinutes, 
-        status: "pending", 
-        id: Date.now().toString() 
-      });
-    }
-    if (playVideo) {
-      const randomVid = getRandomVideo();
-      db.state.activeVideoUrl = randomVid 
-        ? `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4`
-        : "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
+    let forceMediaPayload: Array<{ category: string; index: number }> = [];
+    const emlaKeys = db.keys.emlalock || "";
+    for (const minutes of actions.penalties) {
+      const result = await queuePenalty(profile, emlaKeys, minutes);
+      profile = result.profile;
     }
 
-    // ── Step 7: Phase advancement ─────────────────────────────────
-    const currentModuleReq = modules?.modules?.[db.state.currentPhase + 1]?.requirementPoints;
-    if (content.phaseAdvance || (currentModuleReq && db.state.points >= currentModuleReq)) {
-      db.state.currentPhase = Math.min(db.state.currentPhase + 1, 4);
-      db.state.module = db.state.currentPhase;
+    if (actions.forceMedia.length > 0) {
+      forceMediaPayload = actions.forceMedia;
     }
 
-    // ── Step 8: Loop reset on relock ──────────────────────────────
-    if (db.state.currentPhase === 4 && intent === 'relock') {
-      db.state.loopCycle += 1;
-      db.state.currentPhase = 1;
-      db.state.module = 1;
-      db.state.points = 0;
-      // Rotate Tagesform for new cycle
-      db.state.tagesform = rotateTagesform(db.state.loopCycle);
+    for (const minutes of actions.penalties) {
+      if (minutes > 0) profile.compliance_points += 5;
     }
+    if (actions.setModule !== null) profile.compliance_points += 10;
 
-    // ── Step 9: Tagesform rotation (every 5 messages) ─────────────
-    if (db.state.messageIndex % 5 === 0) {
-      db.state.tagesform = rotateTagesform(db.state.loopCycle);
-    }
+    const aiMessage: ChatMessage = {
+      role: "Lyra",
+      content: actions.cleanText,
+      media: null,
+      voiceUrl: null,
+    };
 
-    // ── Step 10: Random email ambush (5% chance per message) ──────
-    if (Math.random() < 0.05) {
-      await triggerEmailAmbush(db, db.state);
-    }
+    db.chat_history.push({ role: "User", content: message, attachment });
+    db.chat_history.push(aiMessage);
 
-    // ── Step 11: Obedience score adjustment ───────────────────────
-    if (intent === 'rebellion') {
-      db.state.obedienceScore = Math.max(0, (db.state.obedienceScore || 0) - 5);
-    } else if (intent === 'normal' || intent === 'relock') {
-      db.state.obedienceScore = Math.min(100, (db.state.obedienceScore || 0) + 2);
-    }
+    const nextDb: DatabaseState = { user_profile: profile, chat_history: db.chat_history };
+    await writeDB(DB_PATH, nextDb);
 
-    await writeDB(db);
-
-    res.json({ message: aiMessage, state: db.state });
-  } catch (err: any) {
+    res.json({ message: aiMessage, state: profile, forceMedia: forceMediaPayload });
+  } catch (err) {
     console.error("AI Error:", err);
     res.status(500).json({ error: "Die Verbindung ist gerade schlecht. Bitte versuche es gleich noch einmal." });
   }
@@ -462,42 +304,23 @@ app.post("/api/chat", async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 
 app.post("/api/setup", async (req, res) => {
-  const { gemini, emlalock } = req.body;
   try {
-    const db = await readDB();
-    db.keys.gemini = gemini || GEMINI_API_KEY;
-    db.keys.emlalock = emlalock || `${EMLA_USER_ID}:${EMLA_API_KEY}`;
-
-    // Generate Initial Assessment using Content Engine
-    const intent: UserIntent = "normal";
-    const content = selectContent(db.state, "initial_assessment", intent);
-
-    const basePrompt = await buildSystemPrompt(path.join(DATA_DIR, 'lyra_system_prompt_v2.md'));
-    const systemPrompt = basePrompt
-      .replace(/{currentPhase}/g, String(0))
-      .replace(/{daysDenied}/g, String(0))
-      .replace(/{tagesform}/g, 'Streng')
-      .replace(/{contentFingerprint}/g, '[]')
-      .replace(/{loopCycle}/g, String(1))
-      .replace(/{messageIndex}/g, String(0));
-
-    const ai = new GoogleGenAI({ apiKey: db.keys.gemini });
-    const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite",
-      contents: systemPrompt + "\n\n[SYSTEM_DIRECTIVE: Generate the initial assessment. You are Lyra. Destroy his ego. Reference his past. Use what you know about Sebastian — his ADHD, his porn addiction, his failed relationship with Nuria, his sissy conditioning. Start with: [SYSTEM: ASSESSMENT_INITIATED]]",
-    });
-    
-    db.state.chatHistory = [{ 
-      role: "Lyra", 
-      content: `[SYSTEM: ASSESSMENT_INITIATED]\n${response.text}` 
-    }];
+    const { gemini, emlalock } = req.body;
+    const db = await readDB(DB_PATH) as DatabaseState & {
+      keys?: { gemini?: string; emlalock?: string; holder?: string };
+      setupComplete?: boolean;
+    };
+    db.keys = {
+      gemini: gemini || GEMINI_API_KEY,
+      emlalock: emlalock || `${EMLA_USER_ID}:${EMLA_API_KEY}`,
+      holder: EMLA_HOLDER_KEY,
+    };
     db.setupComplete = true;
-    
-    await writeDB(db);
+    await writeDB(DB_PATH, db);
     res.json(db);
-  } catch (err: any) {
+  } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message || "Setup Failed" });
+    res.status(500).json({ error: err instanceof Error ? err.message : "Setup Failed" });
   }
 });
 
@@ -508,36 +331,28 @@ app.post("/api/setup", async (req, res) => {
 app.post("/api/hardware/penalty", async (req, res) => {
   try {
     const { id } = req.body;
-    const db = await readDB();
-    
-    if (!db.keys.emlalock) {
-      return res.status(500).json({ error: "Emlalock keys missing" });
-    }
+    const db = await readDB(DB_PATH) as DatabaseState & {
+      keys?: { emlalock?: string };
+    };
+    const emlaKeys = db.keys?.emlalock || "";
 
-    const [userid, apikey] = db.keys.emlalock.split(":");
-    if (!userid || !apikey) {
-      return res.status(500).json({ error: "Invalid Emlalock keys" });
-    }
-
-    const penalty = db.state.penalties.find((p: any) => p.id === id);
+    const penalty = db.user_profile.penalty_queue.find((p: PenaltyQueueItem) => `${p.enqueuedAt}` === id);
     if (!penalty) return res.status(404).json({ error: "Penalty not found" });
-    if (penalty.status === 'success') {
-      return res.json({ success: true, status: "already_processed" });
+
+    // Attempt to apply immediately
+    const { applyPenalty } = await import("./src/lib/emlalockService.js");
+    const success = await applyPenalty(penalty.minutes, emlaKeys);
+    if (success) {
+      db.user_profile.penalty_queue = db.user_profile.penalty_queue.filter(
+        (p: PenaltyQueueItem) => p !== penalty
+      );
+      await writeDB(DB_PATH, db);
+      return res.json({ success: true, status: "success" });
     }
 
-    const durationSeconds = penalty.duration * 60;
-    const url = `https://api.emlalock.com/addrandom?userid=${userid}&apikey=${apikey}&from=${durationSeconds}&to=${durationSeconds}&text=Lyra_Core_Penalty`;
-    
-    fetch(url).then(async (response) => {
-      const APIRes = await response.json();
-      if (response.ok && !APIRes.error) {
-        penalty.status = "success";
-        await writeDB(db);
-      }
-    }).catch(err => console.error("Emlalock Fetch Error:", err));
-    
     res.json({ success: true, status: "processing" });
   } catch (err) {
+    console.error("Hardware penalty error:", err);
     res.status(500).json({ error: "Internal Error" });
   }
 });
@@ -550,12 +365,12 @@ app.post("/api/voice", async (req, res) => {
   try {
     const { text } = req.body;
     if (!text) return res.status(400).json({ error: "No text provided" });
-    
+
     const audioUrl = await synthesizeVoice(text);
     if (!audioUrl) return res.status(500).json({ error: "Voice synthesis failed" });
-    
+
     res.json({ audioUrl });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Voice service error" });
   }
 });
@@ -564,13 +379,17 @@ app.post("/api/voice", async (req, res) => {
 // EMAIL AMBUSH TRIGGER (manual)
 // ═══════════════════════════════════════════════════════════════════
 
-app.post("/api/ambush", async (req, res) => {
+app.post("/api/ambush", async (_req, res) => {
   try {
-    const db = await readDB();
-    await triggerEmailAmbush(db, db.state);
-    await writeDB(db);
+    const db = await readDB(DB_PATH) as DatabaseState & {
+      keys?: Record<string, string>;
+      setupComplete?: boolean;
+    };
+    await triggerEmailAmbush(db.user_profile as UserProfile & { lastEmailSent?: number; emailCount?: number });
+    await writeDB(DB_PATH, db);
     res.json({ success: true, message: "Ambush triggered" });
   } catch (err) {
+    console.error("Ambush error:", err);
     res.status(500).json({ error: "Ambush failed" });
   }
 });
@@ -587,7 +406,7 @@ app.get("/api/media/:category", async (req, res) => {
   res.json({ url, category });
 });
 
-app.get("/api/video/random", async (req, res) => {
+app.get("/api/video/random", async (_req, res) => {
   const title = getRandomVideo();
   if (!title) return res.status(404).json({ error: "No videos" });
   res.json({ title });
@@ -598,7 +417,6 @@ app.get("/api/video/random", async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 
 async function startServer() {
-  await initDB();
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -608,17 +426,17 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.get("*", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[LYRA v2.2] Server running on http://localhost:${PORT}`);
-    console.log(`[LYRA v2.2] Reality Bleed: Email Bridge ${LYRA_ENABLE_EMAIL_BRIDGE ? 'ACTIVE' : 'OFF'}`);
-    console.log(`[LYRA v2.2] Email Ambush: ${LYRA_ENABLE_EMAIL_AMBUSH ? 'ACTIVE' : 'OFF'}`);
-    console.log(`[LYRA v2.2] Voice Endpoint: ${COLAB_VOICE_URL}`);
+    console.log(`[LYRA v3.1] Server running on http://localhost:${PORT}`);
+    console.log(`[LYRA v3.1] Reality Bleed: Email Bridge ${LYRA_ENABLE_EMAIL_BRIDGE ? 'ACTIVE' : 'OFF'}`);
+    console.log(`[LYRA v3.1] Email Ambush: ${LYRA_ENABLE_EMAIL_AMBUSH ? 'ACTIVE' : 'OFF'}`);
+    console.log(`[LYRA v3.1] Voice Endpoint: ${COLAB_VOICE_URL}`);
   });
 }
 
-startServer();
+boot().then(() => startServer());
