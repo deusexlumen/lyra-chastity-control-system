@@ -62,14 +62,16 @@ describe('stateManager', () => {
     assert.equal(migrated.user_profile.lock_status, 'UNLOCKED');
   });
 
-  it('migrates legacy penalties to penalty_queue', () => {
+  it('migrates only pending legacy penalties to penalty_queue', () => {
     const legacy = {
       state: {
         chatHistory: [],
         penalties: [
           { duration: 10, status: 'pending' },
           { duration: 20 },
-          { duration: 0, status: 'applied' }
+          { duration: 0, status: 'applied' },
+          { duration: 30, status: 'success' },
+          { duration: 40, status: 'error' }
         ]
       }
     };
@@ -92,6 +94,23 @@ describe('stateManager', () => {
   it('readDB throws on invalid JSON', async () => {
     await fs.writeFile(TEST_DB_PATH, '{ invalid json');
     await assert.rejects(() => readDB(TEST_DB_PATH), /JSON/);
+  });
+
+  it('readDB throws on null JSON content', async () => {
+    await fs.writeFile(TEST_DB_PATH, 'null');
+    await assert.rejects(() => readDB(TEST_DB_PATH), /Invalid database state/);
+  });
+
+  it('readDB throws on corrupted V3 state missing required fields', async () => {
+    const corrupted = {
+      user_profile: {
+        compliance_points: 0
+        // missing current_module_id, lock_status, etc.
+      },
+      chat_history: []
+    };
+    await fs.writeFile(TEST_DB_PATH, JSON.stringify(corrupted));
+    await assert.rejects(() => readDB(TEST_DB_PATH), /Invalid database state/);
   });
 
   it('readDB returns default state when file does not exist', async () => {

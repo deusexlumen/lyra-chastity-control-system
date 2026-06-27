@@ -19,9 +19,11 @@ export async function readDB(dbPath: string): Promise<DatabaseState> {
   try {
     const data = await fs.readFile(dbPath, 'utf-8');
     const parsed = JSON.parse(data);
-    if (isValidDatabaseState(parsed)) return parsed;
-    if (parsed.user_profile === undefined) return migrateLegacyState(parsed);
-    throw new Error('Invalid V3 database state shape');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      if (isValidDatabaseState(parsed)) return parsed as DatabaseState;
+      if (!('user_profile' in parsed)) return migrateLegacyState(parsed);
+    }
+    throw new Error('Invalid database state');
   } catch (err: any) {
     if (err.code === 'ENOENT') {
       return { user_profile: { ...DEFAULT_PROFILE }, chat_history: [] };
@@ -35,9 +37,14 @@ export async function writeDB(dbPath: string, db: DatabaseState): Promise<void> 
 }
 
 export function isValidDatabaseState(parsed: any): parsed is DatabaseState {
-  if (!parsed || typeof parsed !== 'object') return false;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
   if (!parsed.user_profile || typeof parsed.user_profile !== 'object') return false;
   if (typeof parsed.user_profile.compliance_points !== 'number') return false;
+  if (typeof parsed.user_profile.current_module_id !== 'number') return false;
+  if (!['LOCKED', 'UNLOCKED'].includes(parsed.user_profile.lock_status)) return false;
+  if (typeof parsed.user_profile.emlalock_session_id !== 'string') return false;
+  if (!parsed.user_profile.story_flags || typeof parsed.user_profile.story_flags !== 'object') return false;
+  if (!Array.isArray(parsed.user_profile.penalty_queue)) return false;
   if (!Array.isArray(parsed.chat_history)) return false;
   return true;
 }
@@ -69,7 +76,7 @@ export function migrateLegacyState(legacy: any): DatabaseState {
         voluntary_relock_count: 0,
       },
       penalty_queue: (state.penalties || [])
-        .filter((p: any) => p?.status === 'pending' || p?.duration)
+        .filter((p: any) => p && (p.status === 'pending' || (!p.status && p.duration)))
         .map((p: any) => ({
           minutes: p.duration || 0,
           enqueuedAt: Date.now(),
