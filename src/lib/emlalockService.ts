@@ -7,8 +7,18 @@ export interface EmlalockResult {
 
 export type EmlalockApiCall = (url: string) => Promise<{ ok: boolean; json: () => Promise<unknown> }>;
 
+const MAX_RETRIES = 3;
+
+function isEmlalockError(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null) return false;
+  return 'error' in body && (body as Record<string, unknown>).error !== undefined;
+}
+
 export function parseEmlalockKeys(combined: string): { userid: string; apikey: string } | null {
-  const [userid, apikey] = combined.split(':');
+  const separatorIndex = combined.indexOf(':');
+  if (separatorIndex === -1) return null;
+  const userid = combined.slice(0, separatorIndex);
+  const apikey = combined.slice(separatorIndex + 1);
   if (!userid || !apikey) return null;
   return { userid, apikey };
 }
@@ -16,16 +26,28 @@ export function parseEmlalockKeys(combined: string): { userid: string; apikey: s
 export async function applyPenalty(
   minutes: number,
   keys: string,
-  fetchImpl: EmlalockApiCall = fetch as EmlalockApiCall
+  fetchImpl: EmlalockApiCall = async (url) => {
+    const res = await fetch(url);
+    return { ok: res.ok, json: () => res.json() as Promise<unknown> };
+  }
 ): Promise<boolean> {
+  if (minutes === 0) return false;
+
   const parsed = parseEmlalockKeys(keys);
   if (!parsed) return false;
+
   const durationSeconds = Math.abs(minutes) * 60;
   const operation = minutes >= 0 ? 'addrandom' : 'removesessiontime';
-  const url = `https://api.emlalock.com/${operation}?userid=${parsed.userid}&apikey=${parsed.apikey}&from=${durationSeconds}&to=${durationSeconds}&text=Lyra_Core_Penalty`;
+  const url = `https://api.emlalock.com/${operation}?userid=${encodeURIComponent(parsed.userid)}&apikey=${encodeURIComponent(parsed.apikey)}&from=${durationSeconds}&to=${durationSeconds}&text=Lyra_Core_Penalty`;
+
   try {
     const res = await fetchImpl(url);
-    return res.ok;
+    if (!res.ok) return false;
+
+    const body = await res.json();
+    if (isEmlalockError(body)) return false;
+
+    return true;
   } catch {
     return false;
   }
@@ -63,7 +85,11 @@ export async function processQueue(
   for (const item of profile.penalty_queue) {
     const success = await applyPenalty(item.minutes, keys, fetchImpl);
     if (!success) {
-      remaining.push({ ...item, retries: item.retries + 1 });
+      if (item.retries < MAX_RETRIES) {
+        remaining.push({ ...item, retries: item.retries + 1 });
+      } else {
+        console.warn(`Dropping penalty queue item after ${MAX_RETRIES} retries`, item);
+      }
     }
   }
   return { ...profile, penalty_queue: remaining };
