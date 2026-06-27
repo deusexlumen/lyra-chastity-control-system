@@ -59,6 +59,7 @@ export async function queuePenalty(
   minutes: number,
   fetchImpl?: EmlalockApiCall
 ): Promise<EmlalockResult> {
+  if (minutes === 0) return { success: false, profile };
   const success = await applyPenalty(minutes, keys, fetchImpl);
   if (success) return { success: true, profile };
 

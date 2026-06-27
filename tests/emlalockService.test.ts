@@ -107,6 +107,20 @@ describe('emlalockService', () => {
     assert.ok(url.includes('apikey=pa%40ss%23'));
   });
 
+  it('does not queue zero-minute penalties', async () => {
+    const profile: UserProfile = {
+      compliance_points: 0,
+      current_module_id: 1,
+      lock_status: 'LOCKED',
+      emlalock_session_id: 'session_123',
+      story_flags: {},
+      penalty_queue: [],
+    };
+    const result = await queuePenalty(profile, 'user:pass', 0);
+    assert.equal(result.success, false);
+    assert.equal(result.profile.penalty_queue.length, 0);
+  });
+
   it('processes queue with mixed success and failure', async () => {
     const profile = baseProfile([
       { minutes: 10, enqueuedAt: Date.now(), retries: 0 },
