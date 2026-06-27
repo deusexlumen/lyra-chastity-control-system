@@ -67,7 +67,7 @@ export interface ModulesJson {
 
 export interface ParsedActions {
   setModule: number | null;
-  setFlags: Array<{ key: string; value: boolean | number }>;
+  setFlags: Array<{ key: string; value: boolean | number | string }>;
   penalties: number[];
   forceMedia: Array<{ category: string; index: number }>;
   cleanText: string;
