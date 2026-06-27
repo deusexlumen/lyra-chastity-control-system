@@ -1,5 +1,6 @@
-import type { ChatMessage } from './engine';
-export type { ChatMessage, UserProfile, DatabaseState } from './engine';
+import type { ChatMessage, UserProfile, ModulesJson } from './engine';
+
+export type { ChatMessage, ChatMessageAttachment, UserProfile, DatabaseState, ModulesJson } from './engine';
 
 export interface Penalty {
   id: string;
@@ -7,12 +8,10 @@ export interface Penalty {
   status: 'pending' | 'success' | 'error';
 }
 
-export interface ChatMessageAttachment {
-  name: string;
-  type: string;
-  content: string;
-}
-
+/**
+ * Legacy app state. Kept during migration to UserProfile.
+ * TODO: Remove once frontend fully uses user_profile.
+ */
 export interface AppState {
   module: number;
   points: number;
@@ -35,9 +34,10 @@ export interface AppState {
 export interface SetupState {
   setupComplete: boolean;
   keys: { gemini: string; emlalock: string; holder?: string };
+  /** Legacy app state. TODO: remove after migration. */
   state: AppState;
-  user_profile: import('./engine').UserProfile;
-  chat_history: import('./engine').ChatMessage[];
-  modules: import('./engine').ModulesJson;
+  user_profile: UserProfile;
+  chat_history: ChatMessage[];
+  modules: ModulesJson;
   media?: { categories: string[] };
 }

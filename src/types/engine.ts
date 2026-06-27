@@ -23,10 +23,16 @@ export interface UserProfile {
   penalty_queue: PenaltyQueueItem[];
 }
 
+export interface ChatMessageAttachment {
+  name: string;
+  type: string;
+  content: string;
+}
+
 export interface ChatMessage {
   role: 'User' | 'Lyra';
   content: string;
-  attachment?: { name: string; type: string; content: string };
+  attachment?: ChatMessageAttachment;
   media?: string | null;
   voiceUrl?: string | null;
 }
@@ -63,6 +69,6 @@ export interface ParsedActions {
   setModule: number | null;
   setFlags: Array<{ key: string; value: boolean | number }>;
   penalties: number[];
-  forceMedia: Array<{ category: string; index: string }>;
+  forceMedia: Array<{ category: string; index: number }>;
   cleanText: string;
 }
