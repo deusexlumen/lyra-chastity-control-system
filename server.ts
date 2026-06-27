@@ -10,6 +10,30 @@ import { loadModules, getModules, buildModulePrompt } from "./src/lib/moduleLoad
 import { queuePenalty } from "./src/lib/emlalockService.js";
 import type { AppDatabase, UserProfile, ChatMessage, PenaltyQueueItem, MediaJson, VideoJson } from "./src/types/engine.js";
 
+function toAppState(profile: UserProfile): import('./src/types/types.js').AppState {
+  return {
+    module: profile.current_module_id,
+    points: profile.compliance_points,
+    chatHistory: [], // chat history is returned separately
+    penalties: profile.penalty_queue.map((p, idx) => ({
+      id: `${p.enqueuedAt}-${idx}`,
+      duration: p.minutes,
+      status: 'pending' as const,
+    })),
+    activeVideoUrl: null,
+    daysDenied: 0,
+    chastityStatus: profile.lock_status === 'LOCKED' ? 'caged' : 'free',
+    sissyLevel: 0,
+    obedienceScore: 0,
+    currentPhase: profile.current_module_id,
+    loopCycle: 1,
+    tagesform: 'Streng',
+    contentFingerprint: [],
+    lastUsedAt: {},
+    messageIndex: 0,
+  };
+}
+
 const app = express();
 const PORT = 3000;
 
@@ -202,6 +226,7 @@ app.get("/api/state", async (_req, res) => {
     const db = await readDB(DB_PATH) as AppDatabase;
     res.json({
       ...db,
+      state: toAppState(db.user_profile),
       setupComplete: db.setupComplete ?? false,
       keys: db.keys || { gemini: GEMINI_API_KEY, emlalock: `${EMLA_USER_ID}:${EMLA_API_KEY}` },
       modules: modulesJson,
@@ -216,8 +241,15 @@ app.get("/api/state", async (_req, res) => {
 app.post("/api/state", async (req, res) => {
   try {
     const current = await readDB(DB_PATH) as AppDatabase;
+    const legacyState = req.body.state || {};
     const next: AppDatabase = {
-      user_profile: { ...current.user_profile, ...req.body.user_profile },
+      user_profile: {
+        ...current.user_profile,
+        ...req.body.user_profile,
+        current_module_id: legacyState.module ?? current.user_profile.current_module_id,
+        compliance_points: legacyState.points ?? current.user_profile.compliance_points,
+        lock_status: legacyState.activeVideoUrl === null && legacyState.chastityStatus === 'free' ? 'UNLOCKED' : current.user_profile.lock_status,
+      },
       chat_history: req.body.chat_history ?? current.chat_history,
       keys: current.keys,
       setupComplete: current.setupComplete,
@@ -299,7 +331,7 @@ app.post("/api/chat", async (req, res) => {
     };
     await writeDB(DB_PATH, nextDb);
 
-    res.json({ message: aiMessage, state: profile, forceMedia: forceMediaPayload });
+    res.json({ message: aiMessage, state: toAppState(profile), user_profile: profile, forceMedia: forceMediaPayload });
   } catch (err) {
     console.error("AI Error:", err);
     res.status(500).json({ error: "Die Verbindung ist gerade schlecht. Bitte versuche es gleich noch einmal." });
