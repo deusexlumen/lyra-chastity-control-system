@@ -3,9 +3,45 @@ import type { ModulesJson, Module, UserProfile } from '../types/engine.js';
 
 let cachedModules: ModulesJson | null = null;
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isModule(value: unknown): value is Module {
+  if (!isObject(value)) return false;
+  return (
+    typeof value.id === 'number' &&
+    typeof value.title === 'string' &&
+    typeof value.requirementPoints === 'number' &&
+    typeof value.ai_prompt === 'string'
+  );
+}
+
+function isModulesJson(value: unknown): value is ModulesJson {
+  if (!isObject(value)) return false;
+  if (!Array.isArray(value.modules)) return false;
+  if (!value.modules.every(isModule)) return false;
+  if (value.global_directives !== undefined) {
+    if (!isObject(value.global_directives)) return false;
+    if (
+      value.global_directives.tone !== undefined &&
+      typeof value.global_directives.tone !== 'string'
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export async function loadModules(modulesPath: string): Promise<ModulesJson> {
   const raw = await fs.readFile(modulesPath, 'utf-8');
-  cachedModules = JSON.parse(raw) as ModulesJson;
+  const parsed: unknown = JSON.parse(raw);
+  if (!isModulesJson(parsed)) {
+    throw new Error(
+      `Invalid modules.json at ${modulesPath}: expected an object with a "modules" array of Module objects`
+    );
+  }
+  cachedModules = parsed;
   return cachedModules;
 }
 
