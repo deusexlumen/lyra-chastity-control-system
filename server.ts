@@ -10,13 +10,14 @@ import { loadModules, getModules, buildModulePrompt } from "./src/lib/moduleLoad
 import { queuePenalty } from "./src/lib/emlalockService.js";
 import type { AppDatabase, UserProfile, ChatMessage, PenaltyQueueItem, MediaJson, VideoJson } from "./src/types/engine.js";
 
-function toAppState(profile: UserProfile): import('./src/types/types.js').AppState {
+function toAppState(db: AppDatabase): import('./src/types/types.js').AppState {
+  const profile = db.user_profile;
   return {
     module: profile.current_module_id,
     points: profile.compliance_points,
-    chatHistory: [], // chat history is returned separately
-    penalties: profile.penalty_queue.map((p, idx) => ({
-      id: `${p.enqueuedAt}-${idx}`,
+    chatHistory: db.chat_history,
+    penalties: profile.penalty_queue.map((p) => ({
+      id: String(p.enqueuedAt),
       duration: p.minutes,
       status: 'pending' as const,
     })),
@@ -226,7 +227,7 @@ app.get("/api/state", async (_req, res) => {
     const db = await readDB(DB_PATH) as AppDatabase;
     res.json({
       ...db,
-      state: toAppState(db.user_profile),
+      state: toAppState(db),
       setupComplete: db.setupComplete ?? false,
       keys: db.keys || { gemini: GEMINI_API_KEY, emlalock: `${EMLA_USER_ID}:${EMLA_API_KEY}` },
       modules: modulesJson,
@@ -255,7 +256,14 @@ app.post("/api/state", async (req, res) => {
       setupComplete: current.setupComplete,
     };
     await writeDB(DB_PATH, next);
-    res.json(next);
+    res.json({
+      ...next,
+      state: toAppState(next),
+      setupComplete: next.setupComplete ?? false,
+      keys: next.keys || { gemini: GEMINI_API_KEY, emlalock: `${EMLA_USER_ID}:${EMLA_API_KEY}` },
+      modules: modulesJson,
+      media: { categories: Object.keys(media || {}) },
+    });
   } catch (err) {
     console.error("DB Error:", err);
     res.status(500).json({ error: "DB Error" });
@@ -331,7 +339,7 @@ app.post("/api/chat", async (req, res) => {
     };
     await writeDB(DB_PATH, nextDb);
 
-    res.json({ message: aiMessage, state: toAppState(profile), user_profile: profile, forceMedia: forceMediaPayload });
+    res.json({ message: aiMessage, state: toAppState(nextDb), user_profile: profile, forceMedia: forceMediaPayload });
   } catch (err) {
     console.error("AI Error:", err);
     res.status(500).json({ error: "Die Verbindung ist gerade schlecht. Bitte versuche es gleich noch einmal." });
