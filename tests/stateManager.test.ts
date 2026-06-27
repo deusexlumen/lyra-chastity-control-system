@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs/promises';
 import path from 'path';
 import { readDB, writeDB, initDB, migrateLegacyState } from '../src/lib/stateManager.js';
+import type { DatabaseState } from '../src/types/engine.js';
 
 const TEST_DB_PATH = path.join(process.cwd(), 'test_local_db.json');
 
@@ -83,9 +84,32 @@ describe('stateManager', () => {
     assert.ok(typeof migrated.user_profile.penalty_queue[0].enqueuedAt === 'number');
   });
 
+  it('empty object falls into legacy migration', () => {
+    const migrated = migrateLegacyState({});
+    assert.equal(migrated.user_profile.current_module_id, 1);
+    assert.equal(migrated.user_profile.lock_status, 'LOCKED');
+    assert.equal(migrated.user_profile.compliance_points, 0);
+    assert.deepEqual(migrated.chat_history, []);
+  });
+
   it('initDB does not overwrite existing file', async () => {
-    const existing = { user_profile: { compliance_points: 99, current_module_id: 3, lock_status: 'LOCKED', emlalock_session_id: '', story_flags: { assessment_completed: true, nuria_trauma_score: 0, promised_obedience: false, voluntary_relock_count: 0 }, penalty_queue: [] }, chat_history: [] };
-    await writeDB(TEST_DB_PATH, existing as any);
+    const existing: DatabaseState = {
+      user_profile: {
+        compliance_points: 99,
+        current_module_id: 3,
+        lock_status: 'LOCKED',
+        emlalock_session_id: '',
+        story_flags: {
+          assessment_completed: true,
+          nuria_trauma_score: 0,
+          promised_obedience: false,
+          voluntary_relock_count: 0
+        },
+        penalty_queue: []
+      },
+      chat_history: []
+    };
+    await writeDB(TEST_DB_PATH, existing);
     const db = await initDB(TEST_DB_PATH);
     assert.equal(db.user_profile.compliance_points, 99);
     assert.equal(db.user_profile.current_module_id, 3);
@@ -101,11 +125,63 @@ describe('stateManager', () => {
     await assert.rejects(() => readDB(TEST_DB_PATH), /Invalid database state/);
   });
 
+  it('readDB throws on string JSON content', async () => {
+    await fs.writeFile(TEST_DB_PATH, JSON.stringify('foo'));
+    await assert.rejects(() => readDB(TEST_DB_PATH), /Invalid database state/);
+  });
+
+  it('readDB throws on array JSON content', async () => {
+    await fs.writeFile(TEST_DB_PATH, JSON.stringify([]));
+    await assert.rejects(() => readDB(TEST_DB_PATH), /Invalid database state/);
+  });
+
   it('readDB throws on corrupted V3 state missing required fields', async () => {
     const corrupted = {
       user_profile: {
         compliance_points: 0
         // missing current_module_id, lock_status, etc.
+      },
+      chat_history: []
+    };
+    await fs.writeFile(TEST_DB_PATH, JSON.stringify(corrupted));
+    await assert.rejects(() => readDB(TEST_DB_PATH), /Invalid database state/);
+  });
+
+  it('readDB throws on invalid lock_status', async () => {
+    const corrupted: DatabaseState = {
+      user_profile: {
+        compliance_points: 0,
+        current_module_id: 1,
+        lock_status: 'INVALID' as 'LOCKED',
+        emlalock_session_id: '',
+        story_flags: {
+          assessment_completed: false,
+          nuria_trauma_score: 0,
+          promised_obedience: false,
+          voluntary_relock_count: 0
+        },
+        penalty_queue: []
+      },
+      chat_history: []
+    };
+    await fs.writeFile(TEST_DB_PATH, JSON.stringify(corrupted));
+    await assert.rejects(() => readDB(TEST_DB_PATH), /Invalid database state/);
+  });
+
+  it('readDB throws on malformed nested penalty_queue', async () => {
+    const corrupted = {
+      user_profile: {
+        compliance_points: 0,
+        current_module_id: 1,
+        lock_status: 'LOCKED',
+        emlalock_session_id: '',
+        story_flags: {
+          assessment_completed: false,
+          nuria_trauma_score: 0,
+          promised_obedience: false,
+          voluntary_relock_count: 0
+        },
+        penalty_queue: [{ minutes: 'ten', enqueuedAt: Date.now(), retries: 0 }]
       },
       chat_history: []
     };
