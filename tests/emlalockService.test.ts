@@ -158,16 +158,36 @@ describe('emlalockService', () => {
     assert.equal(calls, 0);
   });
 
-  it('drops queue items after MAX_RETRIES', async () => {
+  it('keeps failed queue items indefinitely', async () => {
     const profile = baseProfile([
-      { minutes: 5, enqueuedAt: Date.now(), retries: 2 },
-      { minutes: 10, enqueuedAt: Date.now(), retries: 3 },
+      { minutes: 5, enqueuedAt: Date.now(), retries: 10 },
+      { minutes: 10, enqueuedAt: Date.now(), retries: 99 },
     ]);
 
     const result = await processQueue(profile, 'user:pass', mockFetch(false));
 
-    assert.equal(result.penalty_queue.length, 1);
+    assert.equal(result.penalty_queue.length, 2);
     assert.equal(result.penalty_queue[0].minutes, 5);
-    assert.equal(result.penalty_queue[0].retries, 3);
+    assert.equal(result.penalty_queue[0].retries, 11);
+    assert.equal(result.penalty_queue[1].minutes, 10);
+    assert.equal(result.penalty_queue[1].retries, 100);
+  });
+
+  it('skips zero-minute queue items', async () => {
+    const profile = baseProfile([
+      { minutes: 0, enqueuedAt: Date.now(), retries: 0 },
+      { minutes: 10, enqueuedAt: Date.now(), retries: 0 },
+    ]);
+
+    let calls = 0;
+    const result = await processQueue(profile, 'user:pass', async () => {
+      calls++;
+      return { ok: false, json: async () => ({}) };
+    });
+
+    assert.equal(calls, 1);
+    assert.equal(result.penalty_queue.length, 1);
+    assert.equal(result.penalty_queue[0].minutes, 10);
+    assert.equal(result.penalty_queue[0].retries, 1);
   });
 });

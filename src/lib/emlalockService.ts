@@ -7,8 +7,6 @@ export interface EmlalockResult {
 
 export type EmlalockApiCall = (url: string) => Promise<{ ok: boolean; json: () => Promise<unknown> }>;
 
-const MAX_RETRIES = 3;
-
 function isEmlalockError(body: unknown): boolean {
   if (typeof body !== 'object' || body === null) return false;
   return 'error' in body && (body as Record<string, unknown>).error !== undefined;
@@ -84,13 +82,10 @@ export async function processQueue(
 ): Promise<UserProfile> {
   const remaining: PenaltyQueueItem[] = [];
   for (const item of profile.penalty_queue) {
+    if (item.minutes === 0) continue;
     const success = await applyPenalty(item.minutes, keys, fetchImpl);
     if (!success) {
-      if (item.retries < MAX_RETRIES) {
-        remaining.push({ ...item, retries: item.retries + 1 });
-      } else {
-        console.warn(`Dropping penalty queue item after ${MAX_RETRIES} retries`, item);
-      }
+      remaining.push({ ...item, retries: item.retries + 1 });
     }
   }
   return { ...profile, penalty_queue: remaining };
