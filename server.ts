@@ -262,7 +262,7 @@ app.post("/api/state", async (req, res) => {
         ...req.body.user_profile,
         current_module_id: legacyState.module ?? current.user_profile.current_module_id,
         compliance_points: legacyState.points ?? current.user_profile.compliance_points,
-        lock_status: legacyState.activeVideoUrl === null && legacyState.chastityStatus === 'free' ? 'UNLOCKED' : current.user_profile.lock_status,
+        lock_status: legacyState.chastityStatus === 'free' ? 'UNLOCKED' : 'LOCKED',
         active_video_url: legacyState.activeVideoUrl !== undefined ? legacyState.activeVideoUrl : current.user_profile.active_video_url,
       },
       chat_history: req.body.chat_history ?? current.chat_history,

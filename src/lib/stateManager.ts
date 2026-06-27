@@ -76,6 +76,12 @@ export function isValidDatabaseState(parsed: unknown): parsed is DatabaseState {
   )
     return false;
   if (
+    'active_video_url' in parsed.user_profile &&
+    parsed.user_profile.active_video_url !== null &&
+    typeof parsed.user_profile.active_video_url !== 'string'
+  )
+    return false;
+  if (
     !Array.isArray(parsed.chat_history) ||
     !parsed.chat_history.every(isChatMessage)
   )
@@ -123,6 +129,7 @@ export function migrateLegacyState(legacy: unknown): DatabaseState {
         promised_obedience: false,
         voluntary_relock_count: 0,
       },
+      active_video_url: state.activeVideoUrl ?? null,
       penalty_queue: penalties
         .filter(isLegacyPenalty)
         .filter((p) => p.status === 'pending' || (!p.status && (p.duration ?? 0) > 0))
