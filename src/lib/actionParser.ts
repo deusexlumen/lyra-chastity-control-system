@@ -46,8 +46,6 @@ export function parseActions(rawText: string): ParsedActions {
     .replace(/\[ACTION: PENALTY_MINUTES=-?\d+\]/g, '')
     .replace(/\[ACTION: FORCE_MEDIA=[^:\]]+:\d+\]/g, '')
     .replace(/\[(ACTION|ACTIONS?):[^\]]*\]/g, '')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
     .trim();
 
   return result;

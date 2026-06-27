@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseActions } from '../src/lib/actionParser.ts';
+import { parseActions } from '../src/lib/actionParser.js';
 
 describe('parseActions', () => {
   it('parses SET_MODULE and SET_FLAG tags', () => {
@@ -61,7 +61,7 @@ describe('parseActions', () => {
   it('strips unknown action tags from clean text', () => {
     const input = 'Hello [ACTION: UNKNOWN=foo] world [ACTIONS: also_unknown] end.';
     const result = parseActions(input);
-    assert.equal(result.cleanText, 'Hello world end.');
+    assert.equal(result.cleanText, 'Hello  world  end.');
   });
 
   it('ignores FORCE_MEDIA with non-numeric index', () => {
@@ -88,5 +88,18 @@ describe('parseActions', () => {
     const result = parseActions(input);
     assert.deepEqual(result.penalties, [-15]);
     assert.equal(result.cleanText, '');
+  });
+
+  it('ignores FORCE_MEDIA with empty category', () => {
+    const input = 'Schau. [ACTION: FORCE_MEDIA=:2]';
+    const result = parseActions(input);
+    assert.deepEqual(result.forceMedia, []);
+    assert.equal(result.cleanText, 'Schau.');
+  });
+
+  it('preserves intentional whitespace in clean text', () => {
+    const input = 'Hello  world.\n\n\nLine two.';
+    const result = parseActions(input);
+    assert.equal(result.cleanText, 'Hello  world.\n\n\nLine two.');
   });
 });
