@@ -21,6 +21,7 @@ export interface UserProfile {
   emlalock_session_id: string;
   story_flags: StoryFlags;
   penalty_queue: PenaltyQueueItem[];
+  active_video_url?: string | null;
 }
 
 export interface ChatMessageAttachment {

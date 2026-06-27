@@ -13,6 +13,7 @@ export const DEFAULT_PROFILE: UserProfile = {
     voluntary_relock_count: 0,
   },
   penalty_queue: [],
+  active_video_url: null,
 };
 
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {

@@ -21,7 +21,7 @@ function toAppState(db: AppDatabase): import('./src/types/types.js').AppState {
       duration: p.minutes,
       status: 'pending' as const,
     })),
-    activeVideoUrl: null,
+    activeVideoUrl: profile.active_video_url ?? null,
     daysDenied: 0,
     chastityStatus: profile.lock_status === 'LOCKED' ? 'caged' : 'free',
     sissyLevel: 0,
@@ -218,6 +218,19 @@ function getRandomVideo(): string | null {
   return videos.sissy_hypno[Math.floor(Math.random() * videos.sissy_hypno.length)];
 }
 
+function resolveForcedMediaUrl(category: string, index: number): string | null {
+  if (!media) return null;
+  if (category.startsWith('lyra:')) {
+    const sub = category.split(':')[1];
+    const cat = (media as MediaJson).lyra?.[sub];
+    if (cat?.urls?.[index]) return cat.urls[index];
+    return null;
+  }
+  const cat = (media as MediaJson)[category];
+  if (Array.isArray(cat)) return cat[index] ?? null;
+  return null;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // API ROUTES
 // ═══════════════════════════════════════════════════════════════════
@@ -250,6 +263,7 @@ app.post("/api/state", async (req, res) => {
         current_module_id: legacyState.module ?? current.user_profile.current_module_id,
         compliance_points: legacyState.points ?? current.user_profile.compliance_points,
         lock_status: legacyState.activeVideoUrl === null && legacyState.chastityStatus === 'free' ? 'UNLOCKED' : current.user_profile.lock_status,
+        active_video_url: legacyState.activeVideoUrl !== undefined ? legacyState.activeVideoUrl : current.user_profile.active_video_url,
       },
       chat_history: req.body.chat_history ?? current.chat_history,
       keys: current.keys,
@@ -314,6 +328,10 @@ app.post("/api/chat", async (req, res) => {
 
     if (actions.forceMedia.length > 0) {
       forceMediaPayload = actions.forceMedia;
+      // Resolve the first forced media URL and store it
+      const { category, index } = forceMediaPayload[0];
+      const mediaUrl = resolveForcedMediaUrl(category, index);
+      if (mediaUrl) profile.active_video_url = mediaUrl;
     }
 
     for (const minutes of actions.penalties) {
