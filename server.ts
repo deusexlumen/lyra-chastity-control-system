@@ -8,7 +8,7 @@ import { parseActions } from "./src/lib/actionParser.js";
 import { readDB, writeDB, initDB } from "./src/lib/stateManager.js";
 import { loadModules, getModules, buildModulePrompt } from "./src/lib/moduleLoader.js";
 import { queuePenalty } from "./src/lib/emlalockService.js";
-import type { DatabaseState, UserProfile, ChatMessage, PenaltyQueueItem } from "./src/types/engine.js";
+import type { AppDatabase, UserProfile, ChatMessage, PenaltyQueueItem, MediaJson, VideoJson } from "./src/types/engine.js";
 
 const app = express();
 const PORT = 3000;
@@ -20,8 +20,6 @@ app.use(express.json());
 // ═══════════════════════════════════════════════════════════════════
 
 const GEMINI_API_KEY = "AIzaSyAJeIFMY5DnBRkSmq_ByQE2iCjxbmAavP8";
-const GROQ_API_KEY = "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";
-const OPENAI_API_KEY = "sk-kimi-Q3QKvb324UFFEQfPvBUCdHRc6seh7UfSXGYcN3FZvNexHhmx1f6vSwCsQDmOSklw";
 
 // Emlalock API
 const EMLA_USER_ID = "tdhml0y4aw8ru8o";
@@ -51,8 +49,8 @@ const PUBLIC_DIR = isProduction ? "./dist" : "./public";
 const DB_PATH = path.join(process.cwd(), "local_db.json");
 const MODULES_PATH = path.join(DATA_DIR, "modules.json");
 
-let media: any = null;
-let videos: any = null;
+let media: MediaJson | null = null;
+let videos: VideoJson | null = null;
 let emailCountToday = 0;
 let lastEmailDate = "";
 
@@ -171,9 +169,10 @@ function getRandomMedia(category: string, tagFilter?: string): string | null {
     const sub = category.split(':')[1];
     const cat = media.lyra?.[sub];
     if (!cat?.urls?.length) return null;
-    if (tagFilter && cat.tags) {
+    const tags = cat.tags;
+    if (tagFilter && tags) {
       const matchingIdx = cat.urls.map((_: string, i: number) => i)
-        .filter((i: number) => cat.tags[i] === tagFilter);
+        .filter((i: number) => tags[i] === tagFilter);
       if (matchingIdx.length > 0) {
         return cat.urls[matchingIdx[Math.floor(Math.random() * matchingIdx.length)]];
       }
@@ -200,10 +199,10 @@ function getRandomVideo(): string | null {
 
 app.get("/api/state", async (_req, res) => {
   try {
-    const db = await readDB(DB_PATH) as DatabaseState & { keys?: { gemini?: string; emlalock?: string } };
+    const db = await readDB(DB_PATH) as AppDatabase;
     res.json({
       ...db,
-      setupComplete: true,
+      setupComplete: db.setupComplete ?? false,
       keys: db.keys || { gemini: GEMINI_API_KEY, emlalock: `${EMLA_USER_ID}:${EMLA_API_KEY}` },
       modules: modulesJson,
       media: { categories: Object.keys(media || {}) },
@@ -216,10 +215,12 @@ app.get("/api/state", async (_req, res) => {
 
 app.post("/api/state", async (req, res) => {
   try {
-    const current = await readDB(DB_PATH);
-    const next: DatabaseState = {
+    const current = await readDB(DB_PATH) as AppDatabase;
+    const next: AppDatabase = {
       user_profile: { ...current.user_profile, ...req.body.user_profile },
       chat_history: req.body.chat_history ?? current.chat_history,
+      keys: current.keys,
+      setupComplete: current.setupComplete,
     };
     await writeDB(DB_PATH, next);
     res.json(next);
@@ -236,7 +237,7 @@ app.post("/api/state", async (req, res) => {
 app.post("/api/chat", async (req, res) => {
   try {
     const { message, attachment } = req.body;
-    const db = await readDB(DB_PATH) as DatabaseState & { keys?: { gemini?: string; emlalock?: string } };
+    const db = await readDB(DB_PATH) as AppDatabase;
 
     if (!db.keys?.gemini) {
       return res.status(401).json({ error: "No API key configured." });
@@ -248,7 +249,7 @@ app.post("/api/chat", async (req, res) => {
 
     const ai = new GoogleGenAI({ apiKey: db.keys.gemini });
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite",
+      model: "gemini-2.0-flash",
       contents: fullPrompt,
     });
 
@@ -260,6 +261,7 @@ app.post("/api/chat", async (req, res) => {
       profile.current_module_id = actions.setModule;
     }
     for (const flag of actions.setFlags) {
+      if (typeof flag.value === 'string') continue; // skip string flag values
       profile.story_flags = { ...profile.story_flags, [flag.key]: flag.value } as UserProfile["story_flags"];
     }
 
@@ -289,7 +291,12 @@ app.post("/api/chat", async (req, res) => {
     db.chat_history.push({ role: "User", content: message, attachment });
     db.chat_history.push(aiMessage);
 
-    const nextDb: DatabaseState = { user_profile: profile, chat_history: db.chat_history };
+    const nextDb: AppDatabase = {
+      user_profile: profile,
+      chat_history: db.chat_history,
+      keys: db.keys,
+      setupComplete: db.setupComplete,
+    };
     await writeDB(DB_PATH, nextDb);
 
     res.json({ message: aiMessage, state: profile, forceMedia: forceMediaPayload });
@@ -306,10 +313,7 @@ app.post("/api/chat", async (req, res) => {
 app.post("/api/setup", async (req, res) => {
   try {
     const { gemini, emlalock } = req.body;
-    const db = await readDB(DB_PATH) as DatabaseState & {
-      keys?: { gemini?: string; emlalock?: string; holder?: string };
-      setupComplete?: boolean;
-    };
+    const db = await readDB(DB_PATH) as AppDatabase;
     db.keys = {
       gemini: gemini || GEMINI_API_KEY,
       emlalock: emlalock || `${EMLA_USER_ID}:${EMLA_API_KEY}`,
@@ -331,9 +335,7 @@ app.post("/api/setup", async (req, res) => {
 app.post("/api/hardware/penalty", async (req, res) => {
   try {
     const { id } = req.body;
-    const db = await readDB(DB_PATH) as DatabaseState & {
-      keys?: { emlalock?: string };
-    };
+    const db = await readDB(DB_PATH) as AppDatabase;
     const emlaKeys = db.keys?.emlalock || "";
 
     const penalty = db.user_profile.penalty_queue.find((p: PenaltyQueueItem) => `${p.enqueuedAt}` === id);
@@ -381,10 +383,7 @@ app.post("/api/voice", async (req, res) => {
 
 app.post("/api/ambush", async (_req, res) => {
   try {
-    const db = await readDB(DB_PATH) as DatabaseState & {
-      keys?: Record<string, string>;
-      setupComplete?: boolean;
-    };
+    const db = await readDB(DB_PATH) as AppDatabase;
     await triggerEmailAmbush(db.user_profile as UserProfile & { lastEmailSent?: number; emailCount?: number });
     await writeDB(DB_PATH, db);
     res.json({ success: true, message: "Ambush triggered" });
@@ -401,7 +400,8 @@ app.post("/api/ambush", async (_req, res) => {
 app.get("/api/media/:category", async (req, res) => {
   const { category } = req.params;
   const { tag } = req.query;
-  const url = getRandomMedia(category, tag as string | undefined);
+  const tagValue = typeof tag === 'string' ? tag : undefined;
+  const url = getRandomMedia(category, tagValue);
   if (!url) return res.status(404).json({ error: "Category not found" });
   res.json({ url, category });
 });

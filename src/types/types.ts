@@ -1,6 +1,6 @@
 import type { ChatMessage, UserProfile, ModulesJson } from './engine';
 
-export type { ChatMessage, ChatMessageAttachment, UserProfile, DatabaseState, ModulesJson } from './engine';
+export type { ChatMessage, ChatMessageAttachment, UserProfile, DatabaseState, AppDatabase, ModulesJson } from './engine';
 
 export interface Penalty {
   id: string;

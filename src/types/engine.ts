@@ -42,6 +42,21 @@ export interface DatabaseState {
   chat_history: ChatMessage[];
 }
 
+export interface AppDatabase extends DatabaseState {
+  keys?: { gemini?: string; emlalock?: string; holder?: string };
+  setupComplete?: boolean;
+}
+
+export interface MediaJson {
+  lyra?: Record<string, { urls?: string[]; tags?: string[] }>;
+  [key: string]: unknown;
+}
+
+export interface VideoJson {
+  sissy_hypno?: string[];
+  [key: string]: unknown;
+}
+
 export interface MediaTrigger {
   entry_media?: string;
   compliance_gifs?: string;
