@@ -167,6 +167,48 @@ export function checkModuleProgression(
   return { advanced: true, oldModuleId: current.id, newModuleId: next.id };
 }
 
+export function buildBackstoryContext(): string {
+  return `Fester narrativer Rahmen (gilt für alle Antworten):
+- Der User wurde von seiner Kindheitsfreundin Laura in Chastity und in diesen Vertrag gelockt.
+- Der Vertrag ist seine einzige Chance, Ava jemals wiederzusehen.
+- Du bist Lyra, die leitende Therapeutin und Keyholder. Du sprichst von Laura und Ava nur, um den User an seine Motivation und seine Schwäche zu erinnern.`;
+}
+
+export function buildFreedomContext(profile: UserProfile): string {
+  const phase = profile.freedom_phase ?? 1;
+  const promises = profile.active_promises ?? [];
+  const pending = promises.filter((p) => p.status === 'pending');
+
+  let context = `Freiheits-Loop: Phase ${phase}/5.`;
+  if (phase === 1) {
+    context += ' Erste Freilassung ist noch vollständig; nach Orgasmus folgt sanfte Rückführung in die Kontrolle.';
+  } else if (phase === 2) {
+    context += ' Freilassung erfordert ein explizites Versprechen (z. B. innerhalb 24h wieder einschließen). Du erinnerst an Versprechen.';
+  } else if (phase >= 3) {
+    context += ' Freilassung nur nach Zusatzaufgaben, Ruined Orgasm/Edging oder freiwilligem Bitten um Rückkehr in den Käfig während starker Erregung.';
+  }
+
+  if (pending.length > 0) {
+    context += `\nAktive Versprechen:\n${pending.map((p) => `- "${p.text}"`).join('\n')}`;
+  }
+  return context;
+}
+
+export function buildMemoryContext(profile: UserProfile): string {
+  const highlights = profile.memory_highlights ?? [];
+  if (highlights.length === 0) return '';
+  return `Bekannte, dauerhaft wichtige Fakten über den User (aus Assessment und vorherigen Sessions):\n${highlights
+    .slice(-10)
+    .map((h) => `- ${h}`)
+    .join('\n')}`;
+}
+
+export function buildRelationshipContext(profile: UserProfile): string {
+  const level = profile.sissy_identity_level ?? 0;
+  const perception = profile.relationship_perception ?? 'therapy';
+  return `Beziehungsdynamik: Wahrnehmung = "${perception}". Sissy-Identitätsverschiebung = ${level}/100. Reagiere auf emotionale Bekenntnisse ambivalent: „Ob das Liebe ist… darüber kannst du dir Gedanken machen. Fakt ist, du gehörst inzwischen mir.“`;
+}
+
 export function buildModulePrompt(
   modules: ModulesJson,
   milestones: MilestonesJson,
@@ -179,19 +221,40 @@ export function buildModulePrompt(
   const base = modules.global_directives?.tone || '';
   const prompt = mod.ai_prompt;
   const nextMod = modules.modules.find((m) => m.id === mod.id + 1);
+  const intensity = mod.intensity_level ?? 5;
 
-  const moduleContext = `Du befindest dich im Modul "${mod.title}" (ID ${mod.id}, Anforderung: ${mod.requirementPoints} Punkte).${
+  const moduleContext = `Du befindest dich im Modul "${mod.title}" (ID ${mod.id}, Anforderung: ${mod.requirementPoints} Punkte, Intensität ${intensity}/10).${
     nextMod
       ? ` Das nächste Modul ist "${nextMod.title}" (ab ${nextMod.requirementPoints} Punkten).`
       : ' Dies ist das letzte Modul.'
   }`;
 
   const milestoneContext = buildMilestoneContext(milestones, profile);
+  const backstoryContext = buildBackstoryContext();
+  const freedomContext = buildFreedomContext(profile);
+  const relationshipContext = buildRelationshipContext(profile);
+  const assessmentContext = profile.assessment_completed
+    ? 'Das Assessment (Modul 1) wurde abgeschlossen. Du kannst auf die gesammelten Fakten zurückgreifen.'
+    : 'Das Assessment (Modul 1) ist noch nicht abgeschlossen. Fahre mit den vorgeschriebenen Fragen fort.';
 
-  return `${base}\n\n${moduleContext}\n\n${prompt}${milestoneContext}`
+  const parts = [
+    base,
+    backstoryContext,
+    moduleContext,
+    assessmentContext,
+    freedomContext,
+    relationshipContext,
+    prompt,
+    milestoneContext,
+  ].filter(Boolean);
+
+  return parts.join('\n\n')
     .replace(/\{compliance_points\}/g, String(profile.compliance_points))
     .replace(/\{current_module_id\}/g, String(profile.current_module_id))
     .replace(/\{lock_status\}/g, profile.lock_status)
+    .replace(/\{freedom_phase\}/g, String(profile.freedom_phase ?? 1))
+    .replace(/\{sissy_identity_level\}/g, String(profile.sissy_identity_level ?? 0))
+    .replace(/\{relationship_perception\}/g, profile.relationship_perception ?? 'therapy')
     .replace(/\{flag:([^}]+)\}/g, (_match, key) => {
       const value = profile.story_flags[key];
       return value !== undefined ? String(value) : '';

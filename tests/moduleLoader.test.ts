@@ -101,7 +101,7 @@ describe('moduleLoader', () => {
     const prompt = buildModulePrompt(modulesWithoutTone, emptyMilestones, 1, baseProfile);
     assert.ok(!prompt.includes('You are Lyra.'));
     assert.ok(prompt.includes('Prompt text.'));
-    assert.equal(prompt.startsWith('\n\n'), true);
+    assert.ok(prompt.includes('Fester narrativer Rahmen'));
   });
 
   it('replaces missing flag keys with an empty string', () => {

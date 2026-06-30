@@ -26,6 +26,14 @@ export const DEFAULT_PROFILE: UserProfile = {
   active_video_url: null,
   memory_highlights: [],
   language: 'de',
+  // v2.2 initial state
+  freedom_phase: 1,
+  active_freedom_condition: undefined,
+  active_promises: [],
+  assessment_completed: false,
+  sissy_identity_level: 0,
+  relationship_perception: 'therapy',
+  pending_hypno_sessions: 0,
 };
 
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {
@@ -163,6 +171,14 @@ export function migrateLegacyState(legacy: unknown): DatabaseState {
         })),
       memory_highlights: [],
       language: 'de',
+      // v2.2 defaults for migrated states
+      freedom_phase: 1,
+      active_freedom_condition: undefined,
+      active_promises: [],
+      assessment_completed: false,
+      sissy_identity_level: 0,
+      relationship_perception: 'therapy',
+      pending_hypno_sessions: 0,
     },
     chat_history: migratedMessages,
   };

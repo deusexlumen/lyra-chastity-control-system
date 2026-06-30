@@ -5,6 +5,17 @@ export interface StoryFlags {
   nuria_trauma_score?: number;
   promised_obedience?: boolean;
   voluntary_relock_count?: number;
+  awakening_submitted?: boolean;
+  verbal_shatter_accepted?: boolean;
+  nuria_ceremony_completed?: boolean;
+  cuckold_mirror_seen?: boolean;
+  edge_calibrated?: boolean;
+  bj_training_completed?: boolean;
+  anal_trainee?: boolean;
+  daily_task_pending?: boolean;
+  exposure_draft_accepted?: boolean;
+  gay_roulette_completed?: boolean;
+  regression_diagnosed?: boolean;
   [key: string]: boolean | number | undefined;
 }
 
@@ -12,6 +23,13 @@ export interface PenaltyQueueItem {
   minutes: number;
   enqueuedAt: number;
   retries: number;
+}
+
+export interface ActivePromise {
+  text: string;
+  deadline?: number;
+  status: 'pending' | 'broken' | 'fulfilled';
+  createdAt: number;
 }
 
 export interface UserProfile {
@@ -43,6 +61,14 @@ export interface UserProfile {
   memory_highlights?: string[];
   // Language Lyra should respond in
   language?: string;
+  // v2.2 freedom loop and relationship state
+  freedom_phase?: number;
+  active_freedom_condition?: string;
+  active_promises?: ActivePromise[];
+  assessment_completed?: boolean;
+  sissy_identity_level?: number;
+  relationship_perception?: 'therapy' | 'attachment' | 'love';
+  pending_hypno_sessions?: number;
 }
 
 export interface ChatMessageAttachment {
@@ -100,6 +126,10 @@ export interface Module {
   ai_prompt: string;
   media_triggers?: MediaTrigger;
   completion_flags?: string[];
+  // v2.2 freedom-loop metadata
+  freedom_condition?: string;
+  intensity_level?: number;
+  assessment_questions?: string[];
 }
 
 export interface ModulesJson {
@@ -134,4 +164,10 @@ export interface ParsedActions {
   addPoints: number;
   forceMedia: Array<{ category: string; index: number }>;
   cleanText: string;
+  // v2.2 action extensions
+  freedomCondition?: string;
+  recordedPromises: string[];
+  hypnoSessionCount?: number;
+  identityErosionLevel?: number;
+  ambushLauraMessages: string[];
 }

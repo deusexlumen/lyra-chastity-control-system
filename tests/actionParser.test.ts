@@ -122,4 +122,15 @@ describe('parseActions', () => {
     assert.equal(result.addPoints, 0);
     assert.equal(result.cleanText, 'Text.');
   });
+
+  it('parses v2.2 freedom, promise, hypno, identity and ambush tags', () => {
+    const input = 'Vertrag. [ACTION: SET_FREEDOM_CONDITION=24h_promise][ACTION: RECORD_PROMISE=Ich schließe mich innerhalb von 24 Stunden wieder ein.][ACTION: FORCE_HYPNO_SESSION=3][ACTION: ERODE_IDENTITY=15][ACTION: AMBUSH_LAURA=Hast du es ihr schon gesagt?]';
+    const result = parseActions(input);
+    assert.equal(result.freedomCondition, '24h_promise');
+    assert.deepEqual(result.recordedPromises, ['Ich schließe mich innerhalb von 24 Stunden wieder ein.']);
+    assert.equal(result.hypnoSessionCount, 3);
+    assert.equal(result.identityErosionLevel, 15);
+    assert.deepEqual(result.ambushLauraMessages, ['Hast du es ihr schon gesagt?']);
+    assert.equal(result.cleanText, 'Vertrag.');
+  });
 });

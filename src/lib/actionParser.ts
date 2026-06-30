@@ -8,6 +8,8 @@ export function parseActions(rawText: string): ParsedActions {
     addPoints: 0,
     forceMedia: [],
     cleanText: rawText,
+    recordedPromises: [],
+    ambushLauraMessages: [],
   };
 
   const setModuleMatch = rawText.match(/\[ACTION: SET_MODULE=(\d+)\]/g);
@@ -46,12 +48,38 @@ export function parseActions(rawText: string): ParsedActions {
     result.forceMedia.push({ category, index: parseInt(match[2].trim(), 10) });
   }
 
+  const freedomMatch = rawText.match(/\[ACTION: SET_FREEDOM_CONDITION=([^\]]+)\]/);
+  if (freedomMatch) result.freedomCondition = freedomMatch[1].trim();
+
+  const promiseMatches = rawText.matchAll(/\[ACTION: RECORD_PROMISE=([^\]]+)\]/g);
+  for (const match of promiseMatches) {
+    const text = match[1].trim();
+    if (text) result.recordedPromises.push(text);
+  }
+
+  const hypnoMatch = rawText.match(/\[ACTION: FORCE_HYPNO_SESSION=(\d+)\]/);
+  if (hypnoMatch) result.hypnoSessionCount = parseInt(hypnoMatch[1], 10);
+
+  const identityMatch = rawText.match(/\[ACTION: ERODE_IDENTITY=(\d+)\]/);
+  if (identityMatch) result.identityErosionLevel = parseInt(identityMatch[1], 10);
+
+  const ambushMatches = rawText.matchAll(/\[ACTION: AMBUSH_LAURA=([^\]]+)\]/g);
+  for (const match of ambushMatches) {
+    const text = match[1].trim();
+    if (text) result.ambushLauraMessages.push(text);
+  }
+
   result.cleanText = rawText
     .replace(/\[ACTION: SET_MODULE=\d+\]/g, '')
     .replace(/\[ACTION: SET_FLAG=[^:\]]+:[^\]]+\]/g, '')
     .replace(/\[ACTION: PENALTY_MINUTES=-?\d+\]/g, '')
     .replace(/\[ACTION: ADD_POINTS=-?\d+\]/g, '')
     .replace(/\[ACTION: FORCE_MEDIA=[^:\]]+:\d+\]/g, '')
+    .replace(/\[ACTION: SET_FREEDOM_CONDITION=[^\]]+\]/g, '')
+    .replace(/\[ACTION: RECORD_PROMISE=[^\]]+\]/g, '')
+    .replace(/\[ACTION: FORCE_HYPNO_SESSION=\d+\]/g, '')
+    .replace(/\[ACTION: ERODE_IDENTITY=\d+\]/g, '')
+    .replace(/\[ACTION: AMBUSH_LAURA=[^\]]+\]/g, '')
     .replace(/\[(ACTION|ACTIONS?):[^\]]*\]/g, '')
     .trim();
 

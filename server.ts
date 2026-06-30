@@ -147,7 +147,7 @@ function buildLanguageDirective(profile: UserProfile): string {
 }
 
 function buildActionTagDirective(): string {
-  return `\n\nAction-Tags (nur verwenden, wenn sie zur Situation passen):\n- [ACTION: SET_MODULE=<id>] — maximal EINMAL pro Antwort, nur bei Modulwechsel.\n- [ACTION: SET_FLAG=<key>:<true|false|Zahl>] — um Story-Fortschritt zu markieren.\n- [ACTION: PENALTY_MINUTES=<Minuten>] — für Strafen (auch negativ möglich).\n- [ACTION: ADD_POINTS=<Punkte>] — für Belohnungen.\n- [ACTION: FORCE_MEDIA=<Kategorie>:<Index>] — um Medien zu erzwingen.\n\nRegeln:\n- Benutze Tags sparsam und füge sie am besten am Ende der Antwort ein.\n- Schreibe niemals mehrere [ACTION: SET_MODULE=...] in einer Antwort.\n- Wenn kein Tag nötig ist, schreibe keinen.\n- Tags dürfen nie im sichtbaren Gesprächstext stehen bleiben.`;
+  return `\n\nAction-Tags (nur verwenden, wenn sie zur Situation passen):\n- [ACTION: SET_MODULE=<id>] — maximal EINMAL pro Antwort, nur bei Modulwechsel.\n- [ACTION: SET_FLAG=<key>:<true|false|Zahl>] — um Story-Fortschritt zu markieren.\n- [ACTION: PENALTY_MINUTES=<Minuten>] — für Strafen (auch negativ möglich).\n- [ACTION: ADD_POINTS=<Punkte>] — für Belohnungen.\n- [ACTION: FORCE_MEDIA=<Kategorie>:<Index>] — um Medien zu erzwingen.\n- [ACTION: SET_FREEDOM_CONDITION=<bedingung>] — z. B. 24h_promise, voluntary_relock, ruined_only.\n- [ACTION: RECORD_PROMISE=<text>] — speichert ein Versprechen des Users.\n- [ACTION: FORCE_HYPNO_SESSION=<anzahl>] — leitet Hypno-Sessions ein.\n- [ACTION: ERODE_IDENTITY=<level>] — erhöht die Sissy-Identitätsverschiebung (0-100).\n- [ACTION: AMBUSH_LAURA=<nachricht>] — sendet eine Laura-Ambush-E-Mail.\n\nRegeln:\n- Benutze Tags sparsam und füge sie am besten am Ende der Antwort ein.\n- Schreibe niemals mehrere [ACTION: SET_MODULE=...] in einer Antwort.\n- Wenn kein Tag nötig ist, schreibe keinen.\n- Tags dürfen nie im sichtbaren Gesprächstext stehen bleiben.`;
 }
 
 function buildStyleDirective(): string {
@@ -282,12 +282,17 @@ async function generateLyraResponse(
     buildLanguageDirective(db.user_profile);
   const fullPrompt = buildPrompt(systemPrompt, contextMessages, userContent);
 
+  // v2.2: Dynamische Temperatur je nach Modul-Intensität
+  const currentModule = getModuleById(modulesJson, db.user_profile.current_module_id);
+  const intensity = currentModule?.intensity_level ?? 5;
+  const temperature = Math.min(1.1, 0.6 + intensity * 0.05);
+
   const ai = new GoogleGenAI({ apiKey: db.keys.gemini });
   const response = await ai.models.generateContent({
     model: getGeminiModel(),
     contents: fullPrompt,
     config: {
-      temperature: 0.85,
+      temperature,
       topP: 0.95,
       maxOutputTokens: 280,
     },
@@ -725,6 +730,25 @@ app.post("/api/chat", async (req, res) => {
       return res.status(503).json({ error: "Modules not loaded." });
     }
 
+    // v2.2: /red hard stop
+    if (typeof message === 'string' && message.trim().toLowerCase() === '/red') {
+      const now = Date.now();
+      const redResponse: ChatMessage = {
+        id: generateMessageId(),
+        role: 'Lyra',
+        content: "Stop. Ich halte inne. Atme. Du bist sicher. Wenn du bereit bist, sag mir, wie es dir geht – oder ob wir fortfahren.",
+        media: null,
+        voiceUrl: null,
+        createdAt: now,
+        meta: { moduleId: db.user_profile.current_module_id, flags: { ...db.user_profile.story_flags } },
+      };
+      const userMessage: ChatMessage = { id: generateMessageId(), role: 'User', content: message, attachment, createdAt: now };
+      db.chat_history.push(userMessage, redResponse);
+      db.user_profile.last_active_at = now;
+      await writeDB(DB_PATH, db);
+      return res.json({ message: redResponse, state: toAppState(db), user_profile: db.user_profile, forceMedia: [] });
+    }
+
     const { actions } = await generateLyraResponse(db, db.chat_history, message);
 
     let profile: UserProfile = { ...db.user_profile };
@@ -734,6 +758,45 @@ app.post("/api/chat", async (req, res) => {
     for (const flag of actions.setFlags) {
       if (typeof flag.value === 'string') continue; // skip string flag values
       profile.story_flags = { ...profile.story_flags, [flag.key]: flag.value } as UserProfile["story_flags"];
+    }
+
+    // v2.2: process new action tags
+    if (actions.freedomCondition) {
+      profile.active_freedom_condition = actions.freedomCondition;
+      if (actions.freedomCondition.includes('24h')) {
+        const promises = profile.active_promises ?? [];
+        promises.push({
+          text: '24-Stunden-Wiederverschluss-Versprechen',
+          deadline: Date.now() + 24 * 60 * 60 * 1000,
+          status: 'pending',
+          createdAt: Date.now(),
+        });
+        profile.active_promises = promises;
+      }
+    }
+
+    for (const promiseText of actions.recordedPromises) {
+      const promises = profile.active_promises ?? [];
+      promises.push({ text: promiseText, status: 'pending', createdAt: Date.now() });
+      profile.active_promises = promises;
+    }
+
+    if (actions.hypnoSessionCount && actions.hypnoSessionCount > 0) {
+      profile.pending_hypno_sessions = (profile.pending_hypno_sessions ?? 0) + actions.hypnoSessionCount;
+    }
+
+    if (actions.identityErosionLevel && actions.identityErosionLevel > 0) {
+      profile.sissy_identity_level = Math.min(100, (profile.sissy_identity_level ?? 0) + actions.identityErosionLevel);
+      if (profile.sissy_identity_level > 60 && profile.relationship_perception === 'therapy') {
+        profile.relationship_perception = 'attachment';
+      }
+      if (profile.sissy_identity_level > 85 && profile.relationship_perception === 'attachment') {
+        profile.relationship_perception = 'love';
+      }
+    }
+
+    for (const lauraMessage of actions.ambushLauraMessages) {
+      await sendEmail(`Laura: ${lauraMessage.substring(0, 40)}...`, lauraMessage, 'Laura');
     }
 
     let forceMediaPayload: Array<{ category: string; index: number }> = [];
@@ -768,6 +831,8 @@ app.post("/api/chat", async (req, res) => {
       if (progression.advanced) {
         profile.current_module_id = progression.newModuleId;
         profile.compliance_points += 10;
+        // v2.2: escalate freedom phase with module progression
+        profile.freedom_phase = Math.min(5, progression.newModuleId);
         const transition = await generateTransitionMessage(
           db.keys.gemini,
           profile,
