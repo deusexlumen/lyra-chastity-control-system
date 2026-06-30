@@ -7,8 +7,29 @@ import nodemailer from "nodemailer";
 import { parseActions } from "./src/lib/actionParser.js";
 import { readDB, writeDB, initDB } from "./src/lib/stateManager.js";
 import { loadModules, getModules, buildModulePrompt } from "./src/lib/moduleLoader.js";
-import { queuePenalty } from "./src/lib/emlalockService.js";
+import { queuePenalty, processQueue } from "./src/lib/emlalockService.js";
 import type { AppDatabase, UserProfile, ChatMessage, PenaltyQueueItem, MediaJson, VideoJson } from "./src/types/engine.js";
+
+// Load .env if present. Priority:
+// 1. ENV_PATH environment variable
+// 2. .env in the project root
+// 3. C:\Users\Buxe\Projects\Neuer Ordner\.env (your central asset folder)
+// If none is found, the hard-coded fallbacks below are used.
+function loadEnvFile(filePath: string): boolean {
+  try {
+    process.loadEnvFile(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const LOCAL_ENV = path.resolve(process.cwd(), ".env");
+const CENTRAL_ENV = "C:/Users/Buxe/Projects/Neuer Ordner/.env";
+const ENV_PATH = process.env.ENV_PATH || (loadEnvFile(LOCAL_ENV) ? LOCAL_ENV : (loadEnvFile(CENTRAL_ENV) ? CENTRAL_ENV : null));
+if (ENV_PATH) {
+  console.log(`[LYRA v3.1] Loaded environment from ${ENV_PATH}`);
+}
 
 function toAppState(db: AppDatabase): import('./src/types/types.js').AppState {
   const profile = db.user_profile;
@@ -41,28 +62,29 @@ const PORT = 3000;
 app.use(express.json());
 
 // ═══════════════════════════════════════════════════════════════════
-// HARD-CODED API KEYS — V2.2 Reality Bleed Configuration
+// ENVIRONMENT-BASED CONFIG — V2.2 Reality Bleed Configuration
+// Hard-coded values remain as fallbacks for backward compatibility.
 // ═══════════════════════════════════════════════════════════════════
 
-const GEMINI_API_KEY = "AIzaSyAJeIFMY5DnBRkSmq_ByQE2iCjxbmAavP8";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyAJeIFMY5DnBRkSmq_ByQE2iCjxbmAavP8";
 
 // Emlalock API
-const EMLA_USER_ID = "tdhml0y4aw8ru8o";
-const EMLA_API_KEY = "3c5ldeqqsh";
-const EMLA_HOLDER_KEY = "moy0pjkjgg";
+const EMLA_USER_ID = process.env.EMLA_USER_ID || "tdhml0y4aw8ru8o";
+const EMLA_API_KEY = process.env.EMLA_API_KEY || "3c5ldeqqsh";
+const EMLA_HOLDER_KEY = process.env.EMLA_HOLDER_KEY || "moy0pjkjgg";
 
 // V2.2: GMX Email Bridge
-const SMTP_HOST = "mail.gmx.net";
-const SMTP_PORT = 587;
-const SMTP_USER = "elara.vance@gmx.net";
-const SMTP_PASSWORD = "4UV2TUQ4PBC45YJFBWBA";
-const LYRA_USER_EMAIL = "buxloh@gmail.com";
-const LYRA_ENABLE_EMAIL_BRIDGE = true;
-const LYRA_ENABLE_EMAIL_AMBUSH = true;
-const LYRA_MAX_DAILY_EMAILS = 3;
+const SMTP_HOST = process.env.SMTP_HOST || "mail.gmx.net";
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_USER = process.env.SMTP_USER || "elara.vance@gmx.net";
+const SMTP_PASSWORD = process.env.SMTP_PASSWORD || "4UV2TUQ4PBC45YJFBWBA";
+const LYRA_USER_EMAIL = process.env.LYRA_USER_EMAIL || "buxloh@gmail.com";
+const LYRA_ENABLE_EMAIL_BRIDGE = (process.env.LYRA_ENABLE_EMAIL_BRIDGE || "true") === "true";
+const LYRA_ENABLE_EMAIL_AMBUSH = (process.env.LYRA_ENABLE_EMAIL_AMBUSH || "true") === "true";
+const LYRA_MAX_DAILY_EMAILS = Number(process.env.LYRA_MAX_DAILY_EMAILS || 3);
 
 // Colab Voice Endpoint
-const COLAB_VOICE_URL = "https://parakeet-unrest-cane.ngrok-free.dev";
+const COLAB_VOICE_URL = process.env.COLAB_VOICE_URL || "https://parakeet-unrest-cane.ngrok-free.dev";
 
 // ═══════════════════════════════════════════════════════════════════
 // PATHS & STATE
@@ -71,6 +93,7 @@ const COLAB_VOICE_URL = "https://parakeet-unrest-cane.ngrok-free.dev";
 const isProduction = process.env.NODE_ENV === "production";
 const DATA_DIR = isProduction ? "./dist/data" : "./src/data";
 const PUBLIC_DIR = isProduction ? "./dist" : "./public";
+const VIDEO_LIBRARY_DIR = process.env.VIDEO_LIBRARY_DIR || "C:/Users/Buxe/Projects/Neuer Ordner/Videos";
 const DB_PATH = path.join(process.cwd(), "local_db.json");
 const MODULES_PATH = path.join(DATA_DIR, "modules.json");
 
@@ -98,9 +121,8 @@ async function boot() {
   await loadModules(MODULES_PATH);
   modulesJson = getModules();
   await initDB(DB_PATH);
+  await loadDataFiles();
 }
-
-loadDataFiles();
 
 // ═══════════════════════════════════════════════════════════════════
 // EMAIL SYSTEM — V2.2 Reality Bleed
@@ -219,6 +241,11 @@ function getRandomVideo(): string | null {
 }
 
 function resolveForcedMediaUrl(category: string, index: number): string | null {
+  if (category === 'sissy_hypno') {
+    const list = videos?.sissy_hypno;
+    if (Array.isArray(list) && list[index]) return list[index];
+    return null;
+  }
   if (!media) return null;
   if (category.startsWith('lyra:')) {
     const sub = category.split(':')[1];
@@ -239,10 +266,10 @@ app.get("/api/state", async (_req, res) => {
   try {
     const db = await readDB(DB_PATH) as AppDatabase;
     res.json({
-      ...db,
       state: toAppState(db),
+      user_profile: db.user_profile,
+      chat_history: db.chat_history,
       setupComplete: db.setupComplete ?? false,
-      keys: db.keys || { gemini: GEMINI_API_KEY, emlalock: `${EMLA_USER_ID}:${EMLA_API_KEY}` },
       modules: modulesJson,
       media: { categories: Object.keys(media || {}) },
     });
@@ -256,25 +283,28 @@ app.post("/api/state", async (req, res) => {
   try {
     const current = await readDB(DB_PATH) as AppDatabase;
     const legacyState = req.body.state || {};
+    const incomingProfile = typeof req.body.user_profile === 'object' && req.body.user_profile !== null
+      ? req.body.user_profile as Partial<UserProfile>
+      : {};
     const next: AppDatabase = {
       user_profile: {
         ...current.user_profile,
-        ...req.body.user_profile,
-        current_module_id: legacyState.module ?? current.user_profile.current_module_id,
-        compliance_points: legacyState.points ?? current.user_profile.compliance_points,
-        lock_status: legacyState.chastityStatus === 'free' ? 'UNLOCKED' : 'LOCKED',
-        active_video_url: legacyState.activeVideoUrl !== undefined ? legacyState.activeVideoUrl : current.user_profile.active_video_url,
+        ...incomingProfile,
+        current_module_id: legacyState.module ?? incomingProfile.current_module_id ?? current.user_profile.current_module_id,
+        compliance_points: legacyState.points ?? incomingProfile.compliance_points ?? current.user_profile.compliance_points,
+        lock_status: legacyState.chastityStatus === 'free' ? 'UNLOCKED' : (incomingProfile.lock_status ?? current.user_profile.lock_status),
+        active_video_url: legacyState.activeVideoUrl !== undefined ? legacyState.activeVideoUrl : (incomingProfile.active_video_url ?? current.user_profile.active_video_url),
       },
-      chat_history: req.body.chat_history ?? current.chat_history,
+      chat_history: Array.isArray(req.body.chat_history) ? req.body.chat_history : current.chat_history,
       keys: current.keys,
       setupComplete: current.setupComplete,
     };
     await writeDB(DB_PATH, next);
     res.json({
-      ...next,
       state: toAppState(next),
+      user_profile: next.user_profile,
+      chat_history: next.chat_history,
       setupComplete: next.setupComplete ?? false,
-      keys: next.keys || { gemini: GEMINI_API_KEY, emlalock: `${EMLA_USER_ID}:${EMLA_API_KEY}` },
       modules: modulesJson,
       media: { categories: Object.keys(media || {}) },
     });
@@ -297,7 +327,11 @@ app.post("/api/chat", async (req, res) => {
       return res.status(401).json({ error: "No API key configured." });
     }
 
-    const systemPrompt = buildModulePrompt(modulesJson!, db.user_profile.current_module_id, db.user_profile);
+    if (!modulesJson) {
+      return res.status(503).json({ error: "Modules not loaded." });
+    }
+
+    const systemPrompt = buildModulePrompt(modulesJson, db.user_profile.current_module_id, db.user_profile);
     const historyText = db.chat_history.slice(-10).map((m: ChatMessage) => `${m.role}: ${m.content}`).join("\n");
     const fullPrompt = `${systemPrompt}\n\nPrevious context:\n${historyText}\n\nUser: ${message}`;
 
@@ -324,6 +358,7 @@ app.post("/api/chat", async (req, res) => {
     for (const minutes of actions.penalties) {
       const result = await queuePenalty(profile, emlaKeys, minutes);
       profile = result.profile;
+      if (minutes > 0) profile.compliance_points += 5;
     }
 
     if (actions.forceMedia.length > 0) {
@@ -334,10 +369,8 @@ app.post("/api/chat", async (req, res) => {
       if (mediaUrl) profile.active_video_url = mediaUrl;
     }
 
-    for (const minutes of actions.penalties) {
-      if (minutes > 0) profile.compliance_points += 5;
-    }
     if (actions.setModule !== null) profile.compliance_points += 10;
+    profile.compliance_points += actions.addPoints;
 
     const aiMessage: ChatMessage = {
       role: "Lyra",
@@ -417,6 +450,59 @@ app.post("/api/hardware/penalty", async (req, res) => {
   }
 });
 
+app.post("/api/hardware/sync", async (_req, res) => {
+  try {
+    const db = await readDB(DB_PATH) as AppDatabase;
+    const emlaKeys = db.keys?.emlalock || "";
+
+    const profile = await processQueue(db.user_profile, emlaKeys);
+    const nextDb: AppDatabase = {
+      user_profile: profile,
+      chat_history: db.chat_history,
+      keys: db.keys,
+      setupComplete: db.setupComplete,
+    };
+    await writeDB(DB_PATH, nextDb);
+
+    res.json({
+      success: true,
+      state: toAppState(nextDb),
+      pendingPenalties: profile.penalty_queue.length,
+    });
+  } catch (err) {
+    console.error("Hardware sync error:", err);
+    res.status(500).json({ error: "Internal Error" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// MEDIA API — Forced Media Completion
+// ═══════════════════════════════════════════════════════════════════
+
+app.post("/api/media/complete", async (_req, res) => {
+  try {
+    const db = await readDB(DB_PATH) as AppDatabase;
+    const nextDb: AppDatabase = {
+      user_profile: {
+        ...db.user_profile,
+        active_video_url: null,
+      },
+      chat_history: db.chat_history,
+      keys: db.keys,
+      setupComplete: db.setupComplete,
+    };
+    await writeDB(DB_PATH, nextDb);
+
+    res.json({
+      success: true,
+      state: toAppState(nextDb),
+    });
+  } catch (err) {
+    console.error("Media complete error:", err);
+    res.status(500).json({ error: "Internal Error" });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════
 // VOICE ENDPOINT
 // ═══════════════════════════════════════════════════════════════════
@@ -475,6 +561,8 @@ app.get("/api/video/random", async (_req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 
 async function startServer() {
+  app.use('/videos', express.static(VIDEO_LIBRARY_DIR));
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },

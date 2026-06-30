@@ -102,4 +102,24 @@ describe('parseActions', () => {
     const result = parseActions(input);
     assert.equal(result.cleanText, 'Hello  world.\n\n\nLine two.');
   });
+
+  it('parses ADD_POINTS tags and sums them', () => {
+    const input = 'Gut gemacht. [ACTION: ADD_POINTS=10] Mehr. [ACTION: ADD_POINTS=5]';
+    const result = parseActions(input);
+    assert.equal(result.addPoints, 15);
+    assert.equal(result.cleanText, 'Gut gemacht.  Mehr.');
+  });
+
+  it('handles negative ADD_POINTS', () => {
+    const input = 'Wortbruch. [ACTION: ADD_POINTS=-25]';
+    const result = parseActions(input);
+    assert.equal(result.addPoints, -25);
+  });
+
+  it('ignores non-numeric ADD_POINTS', () => {
+    const input = 'Text. [ACTION: ADD_POINTS=abc]';
+    const result = parseActions(input);
+    assert.equal(result.addPoints, 0);
+    assert.equal(result.cleanText, 'Text.');
+  });
 });

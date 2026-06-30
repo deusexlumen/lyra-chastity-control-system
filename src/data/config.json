@@ -1,0 +1,19 @@
+{
+  "appName": "Lyra Chastity App",
+  "sessionId": "LC-9902-X",
+  "aiModel": "gemini-3.1-flash-lite",
+  "liveModel": "models/gemini-2.0-flash-exp",
+  "emlalockBaseUrl": "https://api.emlalock.com",
+  "headerStatus": "System Status: Active",
+  "footer": {
+    "vectorDbStatus": "Active",
+    "vaultStatus": "Locked",
+    "quote": "No escape protocol detected. Enjoy your conditioning."
+  },
+  "initialState": {
+    "module": 0,
+    "points": 0,
+    "chatHistory": [],
+    "penalties": []
+  }
+}

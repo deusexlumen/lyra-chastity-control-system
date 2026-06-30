@@ -85,6 +85,7 @@ export interface ParsedActions {
   setModule: number | null;
   setFlags: Array<{ key: string; value: boolean | number | string }>;
   penalties: number[];
+  addPoints: number;
   forceMedia: Array<{ category: string; index: number }>;
   cleanText: string;
 }

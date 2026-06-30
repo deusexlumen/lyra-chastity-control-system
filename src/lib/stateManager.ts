@@ -129,7 +129,7 @@ export function migrateLegacyState(legacy: unknown): DatabaseState {
         promised_obedience: false,
         voluntary_relock_count: 0,
       },
-      active_video_url: state.activeVideoUrl ?? null,
+      active_video_url: typeof state.activeVideoUrl === 'string' ? state.activeVideoUrl : null,
       penalty_queue: penalties
         .filter(isLegacyPenalty)
         .filter((p) => p.status === 'pending' || (!p.status && (p.duration ?? 0) > 0))

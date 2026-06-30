@@ -33,7 +33,8 @@ export interface AppState {
 
 export interface SetupState {
   setupComplete: boolean;
-  keys: { gemini: string; emlalock: string; holder?: string };
+  /** API keys are no longer returned by the state endpoint. */
+  keys?: { gemini: string; emlalock: string; holder?: string };
   /** Legacy app state. TODO: remove after migration. */
   state: AppState;
   user_profile: UserProfile;
