@@ -41,3 +41,16 @@
   - `server.ts`
   - `tests/actionParser.test.ts`
   - `tests/moduleLoader.test.ts`
+
+## 2026-07-01 - v2.4 Prompt-Set Integration
+
+- **Entscheidung/Problem:** Zentrales Basis-System-Prompt, Hypno-/Mantra-Bausteine und detaillierte ersten 5 Module direkt in der JSON-Struktur hinterlegen.
+- **Lösung:**
+  - `modules.json` enthält jetzt `global_directives.system_prompt` statt nur `tone`.
+  - Module haben neue optionale Felder `slug`, `hypno_intensity` und `milestones`.
+  - `moduleLoader.ts` injiziert das zentrale System-Prompt, den Mantra-Kontext und einen modulspezifischen Hypno-Baustein.
+  - Module 1–5 wurden an das v2.4 Prompt-Set angeglichen: Assessment, Erwachen, Nuria-Wunde, Tiefe Konditionierung, Nuria-Zeremonie.
+- **Betroffene Dateien:**
+  - `src/types/engine.ts`
+  - `src/lib/moduleLoader.ts`
+  - `src/data/modules.json`
