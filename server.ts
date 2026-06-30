@@ -90,9 +90,13 @@ const COLAB_VOICE_URL = process.env.COLAB_VOICE_URL || "";
 // ═══════════════════════════════════════════════════════════════════
 
 app.get("/api/defaults", (_req, res) => {
+  // v2.4: Pre-fill onboarding fields from environment variables for local convenience.
+  // Secrets are still loaded from .env / ENV_PATH and never hard-coded.
+  const emlalockToken = EMLA_USER_ID && EMLA_API_KEY ? `${EMLA_USER_ID}:${EMLA_API_KEY}` : "";
   res.json({
-    gemini: "",
-    emlalock: "",
+    gemini: GEMINI_API_KEY,
+    emlalock: emlalockToken,
+    holder: EMLA_HOLDER_KEY,
   });
 });
 
@@ -1020,6 +1024,7 @@ app.post("/api/setup", async (req, res) => {
     const {
       gemini,
       emlalock,
+      holder,
       real_name,
       ex_name,
       setup_friend,
@@ -1036,7 +1041,7 @@ app.post("/api/setup", async (req, res) => {
     db.keys = {
       gemini: gemini || GEMINI_API_KEY,
       emlalock: emlalock || `${EMLA_USER_ID}:${EMLA_API_KEY}`,
-      holder: EMLA_HOLDER_KEY,
+      holder: holder || EMLA_HOLDER_KEY,
     };
 
     db.user_profile = {

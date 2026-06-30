@@ -178,7 +178,7 @@ State is persisted in `local_db.json` at the project root. The V3 schema is cent
 
 - `src/App.tsx`: Root component. Fetches state, renders onboarding, waiting screen, or messenger UI, handles optimistic chat updates, penalty dispatch, forced media completion, and chat-message management callbacks.
 - `src/components/Chat.tsx`: Messenger-style chat history with timestamps, read receipts, file attachments (base64), inline media, per-Lyra-message edit/delete/regenerate actions, and on-demand voice synthesis.
-- `src/components/Onboarding.tsx`: Narrative multi-step setup collecting personal anchors (names, contract/key dates), a cage proof photo, and API keys. The API-key fields are pre-filled from `/api/defaults`, which intentionally returns empty strings for secrets; keys must be supplied via `.env` or entered during setup.
+- `src/components/Onboarding.tsx`: Narrative multi-step setup collecting personal anchors (names, contract/key dates), a cage proof photo, and API keys (Gemini, Emlalock token, Emlalock holder key). The API-key fields are pre-filled from `/api/defaults` based on environment variables.
 - `src/components/PenaltyDispatcher.tsx`: Lists pending/success/error Emlalock penalties (currently unused in the main UI but kept for reuse).
 - `src/components/ForcedMediaOverlay.tsx`: Full-screen media overlay for forced videos and images.
 
@@ -234,7 +234,7 @@ If you add new tests, place them in `tests/` or `src/__tests__/` and wire them t
 
 - `.env` and `local_db.json` are listed in `.gitignore` and must never be committed.
 - `dist-server/` is excluded from version control; build it locally from `server.ts` when needed.
-- The `/api/defaults` endpoint returns empty strings for secrets so they are not leaked to the frontend.
+- The `/api/defaults` endpoint reads secrets from environment variables and pre-fills the onboarding UI for local single-user convenience. It never returns hard-coded values.
 - `local_db.json` stores keys and state locally without encryption.
 - The application calls third-party services (Gemini, Emlalock, GMX SMTP, an external voice endpoint) with credentials from environment variables or user input.
 - No input sanitization beyond JSON parsing is performed on user messages; the prompt is sent directly to the Gemini API.

@@ -33,6 +33,7 @@ export default function Onboarding({ onComplete }: Props) {
 
   const [geminiKey, setGeminiKey] = useState('');
   const [emlalockKey, setEmlalockKey] = useState('');
+  const [holderKey, setHolderKey] = useState('');
 
   useEffect(() => {
     fetch('/api/defaults')
@@ -40,6 +41,7 @@ export default function Onboarding({ onComplete }: Props) {
       .then((data) => {
         if (data.gemini) setGeminiKey(data.gemini);
         if (data.emlalock) setEmlalockKey(data.emlalock);
+        if (data.holder) setHolderKey(data.holder);
       })
       .catch(() => {});
   }, []);
@@ -206,6 +208,16 @@ export default function Onboarding({ onComplete }: Props) {
               placeholder="USERID:APIKEY"
             />
           </div>
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase tracking-widest text-white/50">Emlalock Holder Key</label>
+            <input
+              type="password"
+              value={holderKey}
+              onChange={(e) => setHolderKey(e.target.value)}
+              className="w-full bg-white/[0.03] border border-white/10 rounded-sm px-4 py-3 text-sm text-white/80 font-mono focus:outline-none focus:border-red-600/50"
+              placeholder="HOLDERAPIKEY"
+            />
+          </div>
         </div>
       ),
     },
@@ -234,6 +246,7 @@ export default function Onboarding({ onComplete }: Props) {
         body: JSON.stringify({
           gemini: geminiKey,
           emlalock: emlalockKey,
+          holder: holderKey,
           real_name: realName.trim() || 'Sebastian',
           ex_name: exName.trim() || 'Nuria',
           setup_friend: setupFriend.trim() || 'Laura',
