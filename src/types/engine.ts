@@ -122,19 +122,23 @@ export interface MediaTrigger {
 export interface Module {
   id: number;
   title: string;
+  slug?: string;
   requirementPoints: number;
   ai_prompt: string;
   media_triggers?: MediaTrigger;
   completion_flags?: string[];
-  // v2.2 freedom-loop metadata
+  milestones?: string[];
+  // v2.2+ freedom-loop metadata
   freedom_condition?: string;
   intensity_level?: number;
   assessment_questions?: string[];
+  hypno_intensity?: number;
 }
 
 export interface ModulesJson {
   global_directives?: {
     tone?: string;
+    system_prompt?: string;
   };
   modules: Module[];
 }

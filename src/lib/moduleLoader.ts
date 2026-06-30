@@ -30,6 +30,12 @@ function isModulesJson(value: unknown): value is ModulesJson {
     ) {
       return false;
     }
+    if (
+      value.global_directives.system_prompt !== undefined &&
+      typeof value.global_directives.system_prompt !== 'string'
+    ) {
+      return false;
+    }
   }
   return true;
 }
@@ -209,6 +215,27 @@ export function buildRelationshipContext(profile: UserProfile): string {
   return `Beziehungsdynamik: Wahrnehmung = "${perception}". Sissy-Identitätsverschiebung = ${level}/100. Reagiere auf emotionale Bekenntnisse ambivalent: „Ob das Liebe ist… darüber kannst du dir Gedanken machen. Fakt ist, du gehörst inzwischen mir.“`;
 }
 
+export function buildMantraContext(): string {
+  return `Mantra- und Konditionierungssystem (wenn passend einstreuen):
+- „Ein braves Sissy-Mädchen gehorcht Lyra.“
+- „Meine Clitty und meine Orgasmen gehören Lyra.“
+- „Je mehr ich leide und gehorche, desto näher komme ich dem, was ich brauche.“
+- „Hypno macht mich leer und gehorsam.“
+- „Laura hat mich verraten. Lyra formt mich.“
+Verwende Mantras in Edging-Aufgaben und nach Hypno-Sessions.`;
+}
+
+export function buildHypnoContext(mod: Module, profile: UserProfile): string {
+  const intensity = mod.hypno_intensity ?? (mod.intensity_level ? Math.ceil(mod.intensity_level / 3) : 1);
+  const pending = profile.pending_hypno_sessions ?? 0;
+  return `Hypno-Spezifikation für dieses Modul (Intensität ${intensity}/5):
+- Wenn passend: Erzwinge Forced-Media-Sessions mit sissy_hypno Videos.
+- Gib klare Instruktionen: Kopfhörer auf, nackt/angemessen, Edging, Mantras wiederholen.
+- Nach der Session: Setze Post-Hypno-Suggestions (Trigger-Wörter wie „good girl“, „Clitty“, „Lyra gehört dir“).
+- Verknüpfe Hypno mit Lust und Chastity: „Je tiefer du in Trance gehst, desto besser fühlt sich der Käfig an.“
+${pending > 0 ? `Aktuell ausstehende Hypno-Sessions: ${pending}.` : ''}`;
+}
+
 export function buildModulePrompt(
   modules: ModulesJson,
   milestones: MilestonesJson,
@@ -218,12 +245,13 @@ export function buildModulePrompt(
   const mod = getModuleById(modules, moduleId);
   if (!mod) throw new Error(`Module ${moduleId} not found`);
 
-  const base = modules.global_directives?.tone || '';
+  const systemPrompt = modules.global_directives?.system_prompt || modules.global_directives?.tone || '';
   const prompt = mod.ai_prompt;
   const nextMod = modules.modules.find((m) => m.id === mod.id + 1);
   const intensity = mod.intensity_level ?? 5;
+  const hypnoIntensity = mod.hypno_intensity ?? Math.ceil(intensity / 3);
 
-  const moduleContext = `Du befindest dich im Modul "${mod.title}" (ID ${mod.id}, Anforderung: ${mod.requirementPoints} Punkte, Intensität ${intensity}/10).${
+  const moduleContext = `Du befindest dich im Modul "${mod.title}"${mod.slug ? ` (${mod.slug})` : ''} (ID ${mod.id}, Anforderung: ${mod.requirementPoints} Punkte, Intensität ${intensity}/10, Hypno-Intensität ${hypnoIntensity}/5).${
     nextMod
       ? ` Das nächste Modul ist "${nextMod.title}" (ab ${nextMod.requirementPoints} Punkten).`
       : ' Dies ist das letzte Modul.'
@@ -233,17 +261,21 @@ export function buildModulePrompt(
   const backstoryContext = buildBackstoryContext();
   const freedomContext = buildFreedomContext(profile);
   const relationshipContext = buildRelationshipContext(profile);
+  const mantraContext = buildMantraContext();
+  const hypnoContext = buildHypnoContext(mod, profile);
   const assessmentContext = profile.assessment_completed
     ? 'Das Assessment (Modul 1) wurde abgeschlossen. Du kannst auf die gesammelten Fakten zurückgreifen.'
     : 'Das Assessment (Modul 1) ist noch nicht abgeschlossen. Fahre mit den vorgeschriebenen Fragen fort.';
 
   const parts = [
-    base,
+    systemPrompt,
     backstoryContext,
     moduleContext,
     assessmentContext,
     freedomContext,
     relationshipContext,
+    mantraContext,
+    hypnoContext,
     prompt,
     milestoneContext,
   ].filter(Boolean);
