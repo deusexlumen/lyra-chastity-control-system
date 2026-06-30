@@ -68,3 +68,20 @@
   - `src/components/Onboarding.tsx`
   - `AGENTS.md`
   - `SESSION_NOTES.md`
+
+
+## 2026-07-01 - Onboarding Auto-Setup aus .env
+
+- **Entscheidung/Problem:** Onboarding-Screen blieb bestehen; API-Keys und persönliche Daten sollen vollständig aus `.env` kommen.
+- **Lösung:**
+  - Neue Env-Vars: `LYRA_REAL_NAME`, `LYRA_EX_NAME`, `LYRA_SETUP_FRIEND`, `LYRA_TRAPPER`, `LYRA_CONTRACT_SIGNED_AT`, `LYRA_CAGE_LOCKED_AT`, `LYRA_KEY_SENT_AT`.
+  - Wenn `LYRA_REAL_NAME` gesetzt ist, schließt der Server das Setup automatisch ab und überspringt den Onboarding-Screen.
+  - `Onboarding.tsx` füllt alle Felder aus `/api/defaults` vor.
+  - `local_db.json` wird nicht mehr versioniert.
+  - E-Mail-Bridge vorübergehend in `.env` auf `false` gesetzt, da GMX die SMTP-Transaktion abgelehnt hat.
+- **Betroffene Dateien:**
+  - `server.ts`
+  - `src/components/Onboarding.tsx`
+  - `.env.example`
+  - `AGENTS.md`
+  - `.gitignore`
