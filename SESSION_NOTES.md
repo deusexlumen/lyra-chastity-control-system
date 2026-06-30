@@ -54,3 +54,17 @@
   - `src/types/engine.ts`
   - `src/lib/moduleLoader.ts`
   - `src/data/modules.json`
+
+
+## 2026-07-01 - Onboarding Pre-fill & Holder Key
+
+- **Entscheidung/Problem:** API-Keys waren im Onboarding leer, da `/api/defaults` keine Secrets mehr ausgab. Für den lokalen Betrieb aus `.env` sollten die Felder aber vorausgefüllt sein. Außerdem fehlte das Holder-Key-Feld.
+- **Lösung:**
+  - `/api/defaults` liest `GEMINI_API_KEY`, `EMLA_USER_ID`/`EMLA_API_KEY` und `EMLA_HOLDER_KEY` aus der Umgebung und sendet sie ans Frontend.
+  - `Onboarding.tsx` hat ein neues Feld für den Emlalock Holder Key und übermittelt es an `/api/setup`.
+  - `AGENTS.md` wurde aktualisiert.
+- **Betroffene Dateien:**
+  - `server.ts`
+  - `src/components/Onboarding.tsx`
+  - `AGENTS.md`
+  - `SESSION_NOTES.md`
