@@ -22,14 +22,14 @@ export default function Onboarding({ onComplete }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const [realName, setRealName] = useState('Sebastian');
-  const [exName, setExName] = useState('Nuria');
-  const [setupFriend, setSetupFriend] = useState('Laura');
-  const [trapper, setTrapper] = useState('Jonathan');
+  const [realName, setRealName] = useState('');
+  const [exName, setExName] = useState('');
+  const [setupFriend, setSetupFriend] = useState('');
+  const [trapper, setTrapper] = useState('');
 
-  const [contractDate, setContractDate] = useState(() => timestampToDateInput(Date.now()));
-  const [cageDate, setCageDate] = useState(() => timestampToDateInput(Date.now()));
-  const [keyDate, setKeyDate] = useState(() => timestampToDateInput(Date.now()));
+  const [contractDate, setContractDate] = useState('');
+  const [cageDate, setCageDate] = useState('');
+  const [keyDate, setKeyDate] = useState('');
 
   const [geminiKey, setGeminiKey] = useState('');
   const [emlalockKey, setEmlalockKey] = useState('');
@@ -39,6 +39,13 @@ export default function Onboarding({ onComplete }: Props) {
     fetch('/api/defaults')
       .then((res) => res.json())
       .then((data) => {
+        if (data.real_name) setRealName(data.real_name);
+        if (data.ex_name) setExName(data.ex_name);
+        if (data.setup_friend) setSetupFriend(data.setup_friend);
+        if (data.trapper) setTrapper(data.trapper);
+        if (data.contract_signed_at) setContractDate(timestampToDateInput(data.contract_signed_at));
+        if (data.cage_locked_at) setCageDate(timestampToDateInput(data.cage_locked_at));
+        if (data.key_sent_at) setKeyDate(timestampToDateInput(data.key_sent_at));
         if (data.gemini) setGeminiKey(data.gemini);
         if (data.emlalock) setEmlalockKey(data.emlalock);
         if (data.holder) setHolderKey(data.holder);

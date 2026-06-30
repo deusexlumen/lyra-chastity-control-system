@@ -178,7 +178,7 @@ State is persisted in `local_db.json` at the project root. The V3 schema is cent
 
 - `src/App.tsx`: Root component. Fetches state, renders onboarding, waiting screen, or messenger UI, handles optimistic chat updates, penalty dispatch, forced media completion, and chat-message management callbacks.
 - `src/components/Chat.tsx`: Messenger-style chat history with timestamps, read receipts, file attachments (base64), inline media, per-Lyra-message edit/delete/regenerate actions, and on-demand voice synthesis.
-- `src/components/Onboarding.tsx`: Narrative multi-step setup collecting personal anchors (names, contract/key dates), a cage proof photo, and API keys (Gemini, Emlalock token, Emlalock holder key). The API-key fields are pre-filled from `/api/defaults` based on environment variables.
+- `src/components/Onboarding.tsx`: Narrative multi-step setup collecting personal anchors (names, contract/key dates), a cage proof photo, and API keys (Gemini, Emlalock token, Emlalock holder key). All fields are pre-filled from `/api/defaults` based on environment variables. If `LYRA_REAL_NAME` is configured in `.env`, the server auto-completes setup and the onboarding screen is skipped.
 - `src/components/PenaltyDispatcher.tsx`: Lists pending/success/error Emlalock penalties (currently unused in the main UI but kept for reuse).
 - `src/components/ForcedMediaOverlay.tsx`: Full-screen media overlay for forced videos and images.
 

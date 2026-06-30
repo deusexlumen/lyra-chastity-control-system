@@ -85,18 +85,23 @@ const COLAB_VOICE_URL = process.env.COLAB_VOICE_URL || "";
 
 // ═══════════════════════════════════════════════════════════════════
 // DEFAULTS ENDPOINT
-// Liefert keine Secrets mehr aus. Die Onboarding-Felder bleiben leer,
-// damit der Nutzer seine eigenen Keys eingeben oder .env nutzen kann.
+// Pre-fills onboarding fields from environment variables. All values are
+// loaded from .env / ENV_PATH and never hard-coded.
 // ═══════════════════════════════════════════════════════════════════
 
 app.get("/api/defaults", (_req, res) => {
-  // v2.4: Pre-fill onboarding fields from environment variables for local convenience.
-  // Secrets are still loaded from .env / ENV_PATH and never hard-coded.
   const emlalockToken = EMLA_USER_ID && EMLA_API_KEY ? `${EMLA_USER_ID}:${EMLA_API_KEY}` : "";
   res.json({
     gemini: GEMINI_API_KEY,
     emlalock: emlalockToken,
     holder: EMLA_HOLDER_KEY,
+    real_name: LYRA_REAL_NAME || undefined,
+    ex_name: LYRA_EX_NAME || undefined,
+    setup_friend: LYRA_SETUP_FRIEND || undefined,
+    trapper: LYRA_TRAPPER || undefined,
+    contract_signed_at: LYRA_CONTRACT_SIGNED_AT || undefined,
+    cage_locked_at: LYRA_CAGE_LOCKED_AT || undefined,
+    key_sent_at: LYRA_KEY_SENT_AT || undefined,
   });
 });
 
@@ -108,6 +113,16 @@ const isProduction = process.env.NODE_ENV === "production";
 const DATA_DIR = isProduction ? "./dist/data" : "./src/data";
 const PUBLIC_DIR = isProduction ? "./dist" : "./public";
 const VIDEO_LIBRARY_DIR = process.env.VIDEO_LIBRARY_DIR || "C:/Users/Buxe/Projects/Neuer Ordner/Videos";
+
+// v2.4: Personal narrative anchors can be fully configured via .env
+const LYRA_REAL_NAME = process.env.LYRA_REAL_NAME || "";
+const LYRA_EX_NAME = process.env.LYRA_EX_NAME || "";
+const LYRA_SETUP_FRIEND = process.env.LYRA_SETUP_FRIEND || "";
+const LYRA_TRAPPER = process.env.LYRA_TRAPPER || "";
+const LYRA_CONTRACT_SIGNED_AT = process.env.LYRA_CONTRACT_SIGNED_AT ? Number(process.env.LYRA_CONTRACT_SIGNED_AT) : undefined;
+const LYRA_CAGE_LOCKED_AT = process.env.LYRA_CAGE_LOCKED_AT ? Number(process.env.LYRA_CAGE_LOCKED_AT) : undefined;
+const LYRA_KEY_SENT_AT = process.env.LYRA_KEY_SENT_AT ? Number(process.env.LYRA_KEY_SENT_AT) : undefined;
+
 const DB_PATH = path.join(process.cwd(), "local_db.json");
 const MODULES_PATH = path.join(DATA_DIR, "modules.json");
 const MILESTONES_PATH = path.join(DATA_DIR, "milestones.json");
@@ -330,7 +345,32 @@ async function boot() {
   modulesJson = getModules();
   await loadMilestones(MILESTONES_PATH);
   milestonesJson = getMilestones();
-  await initDB(DB_PATH);
+  const db = await initDB(DB_PATH) as AppDatabase;
+
+  // v2.4: Auto-complete setup from .env if all required anchors are present.
+  if (!db.setupComplete && LYRA_REAL_NAME) {
+    const now = Date.now();
+    db.keys = {
+      gemini: db.keys?.gemini || GEMINI_API_KEY,
+      emlalock: db.keys?.emlalock || (EMLA_USER_ID && EMLA_API_KEY ? `${EMLA_USER_ID}:${EMLA_API_KEY}` : ""),
+      holder: db.keys?.holder || EMLA_HOLDER_KEY,
+    };
+    db.user_profile = {
+      ...db.user_profile,
+      real_name: LYRA_REAL_NAME,
+      ex_name: LYRA_EX_NAME || undefined,
+      setup_friend: LYRA_SETUP_FRIEND || undefined,
+      trapper: LYRA_TRAPPER || undefined,
+      contract_signed_at: LYRA_CONTRACT_SIGNED_AT || now,
+      cage_locked_at: LYRA_CAGE_LOCKED_AT || now,
+      key_sent_at: LYRA_KEY_SENT_AT || now,
+      setup_completed_at: now,
+      last_active_at: now,
+    };
+    db.setupComplete = true;
+    await writeDB(DB_PATH, db);
+  }
+
   await loadDataFiles();
 }
 
