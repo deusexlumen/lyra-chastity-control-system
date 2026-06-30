@@ -12,6 +12,17 @@ function isEmlalockError(body: unknown): boolean {
   return 'error' in body && (body as Record<string, unknown>).error !== undefined;
 }
 
+async function callEmlalock(fetchImpl: EmlalockApiCall, url: string): Promise<boolean> {
+  try {
+    const res = await fetchImpl(url);
+    if (!res.ok) return false;
+    const body = await res.json();
+    return !isEmlalockError(body);
+  } catch {
+    return false;
+  }
+}
+
 export function parseEmlalockKeys(combined: string): { userid: string; apikey: string } | null {
   const separatorIndex = combined.indexOf(':');
   if (separatorIndex === -1) return null;
@@ -24,6 +35,7 @@ export function parseEmlalockKeys(combined: string): { userid: string; apikey: s
 export async function applyPenalty(
   minutes: number,
   keys: string,
+  holderKey?: string,
   fetchImpl: EmlalockApiCall = async (url) => {
     const res = await fetch(url);
     return { ok: res.ok, json: () => res.json() as Promise<unknown> };
@@ -35,30 +47,31 @@ export async function applyPenalty(
   if (!parsed) return false;
 
   const durationSeconds = Math.abs(minutes) * 60;
-  const operation = minutes >= 0 ? 'addrandom' : 'removesessiontime';
-  const url = `https://api.emlalock.com/${operation}?userid=${encodeURIComponent(parsed.userid)}&apikey=${encodeURIComponent(parsed.apikey)}&from=${durationSeconds}&to=${durationSeconds}&text=Lyra_Core_Penalty`;
+  const encodedUserId = encodeURIComponent(parsed.userid);
+  const encodedApiKey = encodeURIComponent(parsed.apikey);
+  const text = encodeURIComponent('Lyra_Core_Penalty');
+  const baseParams = `userid=${encodedUserId}&apikey=${encodedApiKey}`;
 
-  try {
-    const res = await fetchImpl(url);
-    if (!res.ok) return false;
-
-    const body = await res.json();
-    if (isEmlalockError(body)) return false;
-
-    return true;
-  } catch {
-    return false;
+  if (minutes > 0) {
+    const addUrl = `https://api.emlalock.com/addrandom?${baseParams}&from=${durationSeconds}&to=${durationSeconds}&text=${text}`;
+    const maxUrl = `https://api.emlalock.com/addmaximum?${baseParams}&value=${durationSeconds}`;
+    return (await callEmlalock(fetchImpl, addUrl)) && (await callEmlalock(fetchImpl, maxUrl));
   }
+
+  if (!holderKey) return false;
+  const subUrl = `https://api.emlalock.com/sub?${baseParams}&holderapikey=${encodeURIComponent(holderKey)}&value=${durationSeconds}&text=${text}`;
+  return callEmlalock(fetchImpl, subUrl);
 }
 
 export async function queuePenalty(
   profile: UserProfile,
   keys: string,
   minutes: number,
+  holderKey?: string,
   fetchImpl?: EmlalockApiCall
 ): Promise<EmlalockResult> {
   if (minutes === 0) return { success: false, profile };
-  const success = await applyPenalty(minutes, keys, fetchImpl);
+  const success = await applyPenalty(minutes, keys, holderKey, fetchImpl);
   if (success) return { success: true, profile };
 
   const item: PenaltyQueueItem = {
@@ -78,12 +91,13 @@ export async function queuePenalty(
 export async function processQueue(
   profile: UserProfile,
   keys: string,
+  holderKey?: string,
   fetchImpl?: EmlalockApiCall
 ): Promise<UserProfile> {
   const remaining: PenaltyQueueItem[] = [];
   for (const item of profile.penalty_queue) {
     if (item.minutes === 0) continue;
-    const success = await applyPenalty(item.minutes, keys, fetchImpl);
+    const success = await applyPenalty(item.minutes, keys, holderKey, fetchImpl);
     if (!success) {
       remaining.push({ ...item, retries: item.retries + 1 });
     }

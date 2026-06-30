@@ -1,14 +1,15 @@
 import express from "express";
 import path from "path";
 import fs from "fs/promises";
+import { randomUUID } from "crypto";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import nodemailer from "nodemailer";
 import { parseActions } from "./src/lib/actionParser.js";
 import { readDB, writeDB, initDB } from "./src/lib/stateManager.js";
-import { loadModules, getModules, buildModulePrompt } from "./src/lib/moduleLoader.js";
+import { loadModules, getModules, loadMilestones, getMilestones, getModuleById, buildModulePrompt, checkModuleProgression, getPendingMilestones } from "./src/lib/moduleLoader.js";
 import { queuePenalty, processQueue } from "./src/lib/emlalockService.js";
-import type { AppDatabase, UserProfile, ChatMessage, PenaltyQueueItem, MediaJson, VideoJson } from "./src/types/engine.js";
+import type { AppDatabase, UserProfile, ChatMessage, PenaltyQueueItem, MediaJson, VideoJson, ParsedActions } from "./src/types/engine.js";
 
 // Load .env if present. Priority:
 // 1. ENV_PATH environment variable
@@ -33,9 +34,10 @@ if (ENV_PATH) {
 
 function toAppState(db: AppDatabase): import('./src/types/types.js').AppState {
   const profile = db.user_profile;
+  const pendingMilestones = milestonesJson
+    ? getPendingMilestones(milestonesJson, profile).map((m) => m.title)
+    : [];
   return {
-    module: profile.current_module_id,
-    points: profile.compliance_points,
     chatHistory: db.chat_history,
     penalties: profile.penalty_queue.map((p) => ({
       id: String(p.enqueuedAt),
@@ -43,16 +45,10 @@ function toAppState(db: AppDatabase): import('./src/types/types.js').AppState {
       status: 'pending' as const,
     })),
     activeVideoUrl: profile.active_video_url ?? null,
-    daysDenied: 0,
+    activeMediaCategory: profile.active_media_category ?? null,
+    activeMediaIndex: profile.active_media_index ?? null,
     chastityStatus: profile.lock_status === 'LOCKED' ? 'caged' : 'free',
-    sissyLevel: 0,
-    obedienceScore: 0,
-    currentPhase: profile.current_module_id,
-    loopCycle: 1,
-    tagesform: 'Streng',
-    contentFingerprint: [],
-    lastUsedAt: {},
-    messageIndex: 0,
+    pendingMilestones,
   };
 }
 
@@ -87,6 +83,19 @@ const LYRA_MAX_DAILY_EMAILS = Number(process.env.LYRA_MAX_DAILY_EMAILS || 3);
 const COLAB_VOICE_URL = process.env.COLAB_VOICE_URL || "https://parakeet-unrest-cane.ngrok-free.dev";
 
 // ═══════════════════════════════════════════════════════════════════
+// DEFAULTS ENDPOINT
+// Returns the resolved default credentials so the onboarding UI can
+// pre-fill the API-key fields when no custom keys are configured.
+// ═══════════════════════════════════════════════════════════════════
+
+app.get("/api/defaults", (_req, res) => {
+  res.json({
+    gemini: GEMINI_API_KEY,
+    emlalock: `${EMLA_USER_ID}:${EMLA_API_KEY}`,
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
 // PATHS & STATE
 // ═══════════════════════════════════════════════════════════════════
 
@@ -96,42 +105,233 @@ const PUBLIC_DIR = isProduction ? "./dist" : "./public";
 const VIDEO_LIBRARY_DIR = process.env.VIDEO_LIBRARY_DIR || "C:/Users/Buxe/Projects/Neuer Ordner/Videos";
 const DB_PATH = path.join(process.cwd(), "local_db.json");
 const MODULES_PATH = path.join(DATA_DIR, "modules.json");
+const MILESTONES_PATH = path.join(DATA_DIR, "milestones.json");
 
 let media: MediaJson | null = null;
 let videos: VideoJson | null = null;
+let appConfig: { aiModel?: string; liveModel?: string } | null = null;
 let emailCountToday = 0;
 let lastEmailDate = "";
 
 let modulesJson: ReturnType<typeof getModules> | null = null;
+let milestonesJson: ReturnType<typeof getMilestones> | null = null;
+
+function getGeminiModel(): string {
+  const raw = appConfig?.liveModel || appConfig?.aiModel || 'gemini-2.0-flash';
+  return raw.replace(/^models\//, '');
+}
+
+function generateMessageId(): string {
+  return randomUUID();
+}
+
+function formatDate(ts: number): string {
+  if (!ts) return 'unbekannt';
+  return new Date(ts).toLocaleDateString('de-DE');
+}
+
+const LANGUAGE_NAMES: Record<string, string> = {
+  de: 'Deutsch',
+  en: 'Englisch',
+  fr: 'Französisch',
+  es: 'Spanisch',
+  it: 'Italienisch',
+};
+
+function buildLanguageDirective(profile: UserProfile): string {
+  const lang = profile.language || 'de';
+  if (lang === 'de') return '';
+  const name = LANGUAGE_NAMES[lang] || lang;
+  return `\n\nSprache: Antworte ausschließlich auf ${name}.`;
+}
+
+function buildActionTagDirective(): string {
+  return `\n\nAction-Tags (nur verwenden, wenn sie zur Situation passen):\n- [ACTION: SET_MODULE=<id>] — maximal EINMAL pro Antwort, nur bei Modulwechsel.\n- [ACTION: SET_FLAG=<key>:<true|false|Zahl>] — um Story-Fortschritt zu markieren.\n- [ACTION: PENALTY_MINUTES=<Minuten>] — für Strafen (auch negativ möglich).\n- [ACTION: ADD_POINTS=<Punkte>] — für Belohnungen.\n- [ACTION: FORCE_MEDIA=<Kategorie>:<Index>] — um Medien zu erzwingen.\n\nRegeln:\n- Benutze Tags sparsam und füge sie am besten am Ende der Antwort ein.\n- Schreibe niemals mehrere [ACTION: SET_MODULE=...] in einer Antwort.\n- Wenn kein Tag nötig ist, schreibe keinen.\n- Tags dürfen nie im sichtbaren Gesprächstext stehen bleiben.`;
+}
+
+function buildStyleDirective(): string {
+  return `\n\nStilvorgaben:\n- Antworte in 1–3 kurzen Absätzen, maximal 120 Wörter.\n- Vermeide Wiederholungen dessen, was der User gerade geschrieben hat.\n- Stelle maximal eine konkrete Frage pro Nachricht.\n- Nie Worte wie 'Spiel', 'Quest', 'Level', 'Task', 'Punkte' benutzen.\n- Keine Emojis. Keine Aufzählungszeichen mit Fragen.\n- Bleibe dominant, kühl und realistisch.`;
+}
+
+function getFallbackResponse(language?: string): string {
+  switch (language) {
+    case 'de':
+      return 'Ich höre dir zu. Mach weiter.';
+    case 'en':
+      return "I'm listening. Continue.";
+    case 'fr':
+      return "Je t'écoute. Continue.";
+    case 'es':
+      return 'Te escucho. Continúa.';
+    case 'it':
+      return 'Ti ascolto. Continua.';
+    default:
+      return 'Ich höre dir zu. Mach weiter.';
+  }
+}
+
+function buildMemoryContext(profile: UserProfile): string {
+  const facts: string[] = [];
+  if (profile.real_name) facts.push(`Sein richtiger Name ist ${profile.real_name}.`);
+  if (profile.ex_name) facts.push(`Seine Ex-Freundin ist ${profile.ex_name}.`);
+  if (profile.setup_friend) facts.push(`${profile.setup_friend} hat ihn hereingelegt und dazu gebracht, den Vertrag zu unterschreiben und den Käfig anzulegen.`);
+  if (profile.trapper) facts.push(`Sein Rivale/Dealer ist ${profile.trapper}.`);
+  if (profile.contract_signed_at) facts.push(`Vertrag unterschrieben am ${formatDate(profile.contract_signed_at)}.`);
+  if (profile.cage_locked_at) facts.push(`Käfig angelegt am ${formatDate(profile.cage_locked_at)}.`);
+  if (profile.key_sent_at) facts.push(`Schlüssel an Lyra geschickt am ${formatDate(profile.key_sent_at)}.`);
+  if (profile.key_received_at) facts.push(`Schlüssel von Lyra erhalten am ${formatDate(profile.key_received_at)}.`);
+
+  const highlights = profile.memory_highlights || [];
+  if (highlights.length > 0) {
+    facts.push(`Wichtige Erinnerungen:\n${highlights.map((h) => `- ${h}`).join('\n')}`);
+  }
+
+  if (facts.length === 0) return '';
+  return `\n\nRealitäts-Anker, die du natürlich einbauen kannst:\n${facts.map((f) => `- ${f}`).join('\n')}\nNutze diese Details nur, wenn sie zum Gespräch passen. Sprich sie nie alle auf einmal an.`;
+}
+
+function buildPrompt(systemPrompt: string, contextMessages: ChatMessage[], userContent: string): string {
+  const historyText = contextMessages.slice(-10).map((m: ChatMessage) => `${m.role}: ${m.content}`).join("\n");
+  return `${systemPrompt}\n\nPrevious context:\n${historyText}\n\nUser: ${userContent}`;
+}
+
+async function extractMemoryHighlights(
+  apiKey: string,
+  profile: UserProfile,
+  userContent: string,
+  lyraContent: string
+): Promise<string[]> {
+  const existing = profile.memory_highlights || [];
+  const prompt = `Du bist Lyra, eine aufmerksame Keyholderin. Extrahiere aus dem folgenden Chat-Abschnitt 0–2 neue, dauerhaft wichtige Fakten über den User (Schwächen, Ängste, Vorlieben, Versprechen, konkrete Details). Berücksichtige bereits bekannte Highlights, damit du keine Duplikate nennst.
+
+Bereits bekannte Highlights:
+${existing.length > 0 ? existing.map((h) => `- ${h}`).join('\n') : '- noch keine'}
+
+User: ${userContent}
+Lyra: ${lyraContent}
+
+Gib nur neue Fakten im Format "- Fakt" aus. Wenn nichts Neues dazukommt, antworte mit "NONE".`;
+
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateContent({
+      model: getGeminiModel(),
+      contents: prompt,
+      config: {
+        temperature: 0.3,
+        maxOutputTokens: 120,
+      },
+    });
+    const text = (response.text || '').trim();
+    if (!text || text.toUpperCase() === 'NONE') return [];
+    const newHighlights = text.split('\n')
+      .map((line) => line.replace(/^-\s*/, '').trim())
+      .filter((line) => line.length > 0);
+    const existingLower = existing.map((h) => h.toLowerCase());
+    return newHighlights.filter((h) => !existingLower.includes(h.toLowerCase()));
+  } catch {
+    return [];
+  }
+}
+
+async function generateTransitionMessage(
+  apiKey: string,
+  profile: UserProfile,
+  oldModuleId: number,
+  newModuleId: number
+): Promise<string> {
+  if (!modulesJson) return '';
+  const oldMod = getModuleById(modulesJson, oldModuleId);
+  const newMod = getModuleById(modulesJson, newModuleId);
+  if (!oldMod || !newMod) return '';
+
+  const langDirective = buildLanguageDirective(profile);
+  const prompt = `Du bist Lyra, eine kalte, dominante Keyholderin. Der User hat gerade das Modul "${oldMod.title}" abgeschlossen und tritt nun in das Modul "${newMod.title}" ein. Schreibe einen kurzen, eiskalten, realistischen Übergangssatz (max. 25 Wörter). Verwende keine Action-Tags und keine Erklärungen.${langDirective}`;
+
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateContent({
+      model: getGeminiModel(),
+      contents: prompt,
+      config: {
+        temperature: 0.8,
+        maxOutputTokens: 80,
+      },
+    });
+    return (response.text || '').trim();
+  } catch {
+    return `Wir gehen einen Schritt weiter. Willkommen im Modul „${newMod.title}“.`;
+  }
+}
+
+async function generateLyraResponse(
+  db: AppDatabase,
+  contextMessages: ChatMessage[],
+  userContent: string
+): Promise<{ rawText: string; actions: ParsedActions }> {
+  if (!modulesJson) throw new Error("Modules not loaded");
+  if (!milestonesJson) throw new Error("Milestones not loaded");
+  if (!db.keys?.gemini) throw new Error("No API key configured");
+
+  const systemPrompt =
+    buildModulePrompt(modulesJson, milestonesJson, db.user_profile.current_module_id, db.user_profile) +
+    buildActionTagDirective() +
+    buildStyleDirective() +
+    buildMemoryContext(db.user_profile) +
+    buildLanguageDirective(db.user_profile);
+  const fullPrompt = buildPrompt(systemPrompt, contextMessages, userContent);
+
+  const ai = new GoogleGenAI({ apiKey: db.keys.gemini });
+  const response = await ai.models.generateContent({
+    model: getGeminiModel(),
+    contents: fullPrompt,
+    config: {
+      temperature: 0.85,
+      topP: 0.95,
+      maxOutputTokens: 280,
+    },
+  });
+
+  const rawText = response.text || "";
+  const actions = parseActions(rawText);
+  if (!actions.cleanText.trim()) {
+    actions.cleanText = getFallbackResponse(db.user_profile.language);
+  }
+  return { rawText, actions };
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // LOADING
 // ═══════════════════════════════════════════════════════════════════
 
 async function loadDataFiles() {
-  const [mediaContent, vidContent] = await Promise.all([
+  const [mediaContent, vidContent, configContent] = await Promise.all([
     fs.readFile(path.join(PUBLIC_DIR, "media.json"), "utf-8"),
-    fs.readFile(path.join(PUBLIC_DIR, "videos.json"), "utf-8").catch(() => "{\"sissy_hypno\":[]}")
+    fs.readFile(path.join(PUBLIC_DIR, "videos.json"), "utf-8").catch(() => "{\"sissy_hypno\":[]}"),
+    fs.readFile(path.join(DATA_DIR, "config.json"), "utf-8").catch(() => "{}")
   ]);
   media = JSON.parse(mediaContent);
   videos = JSON.parse(vidContent);
+  appConfig = JSON.parse(configContent);
 }
 
 async function boot() {
   await loadModules(MODULES_PATH);
   modulesJson = getModules();
+  await loadMilestones(MILESTONES_PATH);
+  milestonesJson = getMilestones();
   await initDB(DB_PATH);
   await loadDataFiles();
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// EMAIL SYSTEM — V2.2 Reality Bleed
+// EMAIL SYSTEM — V2.3 Multi-Sender Reality Bleed
 // ═══════════════════════════════════════════════════════════════════
 
-async function sendEmail(subject: string, text: string, isAmbush = false) {
+async function sendEmail(subject: string, text: string, fromName = 'Lyra') {
   if (!LYRA_ENABLE_EMAIL_BRIDGE) return;
 
-  // Rate limiting
+  // Global rate limiting guard
   const today = new Date().toISOString().split('T')[0];
   if (lastEmailDate !== today) {
     emailCountToday = 0;
@@ -148,41 +348,152 @@ async function sendEmail(subject: string, text: string, isAmbush = false) {
     });
 
     await transporter.sendMail({
-      from: `"Lyra" <${SMTP_USER}>`,
+      from: `"${fromName}" <${SMTP_USER}>`,
       to: LYRA_USER_EMAIL,
-      subject: isAmbush ? `🔴 AMBUSH: ${subject}` : subject,
-      text: isAmbush ? `[REALITY BLEED]\n\n${text}\n\n— This message was injected into your reality by Lyra.` : text,
+      subject,
+      text,
     });
 
     emailCountToday++;
-    console.log(`[EMAIL] ${isAmbush ? 'AMBUSH' : 'Standard'} sent: ${subject}`);
+    console.log(`[EMAIL] ${fromName} sent: ${subject}`);
   } catch (err) {
     console.error("Email send failed:", err);
   }
 }
 
-// Email Ambush: Random demeaning messages sent to real email
-async function triggerEmailAmbush(profile: UserProfile & { lastEmailSent?: number; emailCount?: number }) {
+type EmailTemplate = string | ((profile: UserProfile) => string);
+
+interface EmailSender {
+  id: string;
+  name: (profile: UserProfile) => string;
+  weight: number;
+  subjects: EmailTemplate[];
+  bodies: EmailTemplate[];
+}
+
+const EMAIL_SENDERS: EmailSender[] = [
+  {
+    id: 'lyra',
+    name: () => 'Lyra',
+    weight: 3,
+    subjects: [
+      "Dein Käfig",
+      (p) => `${p.setup_friend || 'Deine Freundin'} hat recht gehabt`,
+      "Wir müssen reden",
+      "Noch wach?",
+      "Ein Gedanke",
+      "Der Schlüssel",
+      "Nicht vergessen"
+    ],
+    bodies: [
+      `Ich hoffe, du hast den Käfig noch an. Wir beide wissen, was passiert, wenn nicht.`,
+      (p) => `${p.ex_name || 'Deine Ex'} würde lachen, wenn sie wüsste, wo du jetzt stehst. Und ${p.setup_friend || 'deine Freundin'} auch.`,
+      `Du hast heute noch nichts von dir hören lassen. Das gefällt mir nicht.`,
+      `Manchmal muss ich dich auch außerhalb dieses Fensters erreichen. Denk dran.`,
+      `Der Schlüssel ist sicher. Das einzige, was du kontrollierst, ist, wie sehr du leidest.`,
+      (p) => `Wie fühlt es sich an, ${p.real_name || 'du'}, wenn du merkst, dass du freiwillig abgedichtet hast?`,
+      `Keine Panik. Ich schreibe nur, damit du weißt, dass ich hier bin. Immer.`
+    ],
+  },
+  {
+    id: 'laura',
+    name: () => 'Laura',
+    weight: 2,
+    subjects: [
+      "Hast du es bereut?",
+      "Laura hier",
+      "Dein kleiner Trip",
+      "Zwischen uns",
+      "Noch drin?"
+    ],
+    bodies: [
+      (p) => `Ich wusste, dass du es tun würdest. ${p.setup_friend || 'Deine Freundin'} hat gesagt, du wärst leicht zu überreden. Offenbar hatte sie recht.`,
+      `Lyra hat mich gerade wissen lassen, dass sie den Schlüssel hat. Ich bin gespannt, wie lange du durchhältst.`,
+      (p) => `Ich habe ${p.ex_name || 'deiner Ex'} neulich erzählt, was aus dir geworden ist. Sie musste lachen. Und dann schweigen.`,
+      `Vergiss nicht: Du hast freiwillig unterschrieben. Ich habe nur den Stift gereicht.`,
+      (p) => `Wenn du raus willst, sag ${p.real_name || 'mir'} nichts. Sag Lyra. Ich kann nichts mehr ändern.`
+    ],
+  },
+  {
+    id: 'nuria',
+    name: (p) => p.ex_name || 'Nuria',
+    weight: 2,
+    subjects: [
+      "Erinnerst du dich?",
+      "Ich habe gehört...",
+      "Dein neues Ich",
+      "Von früher",
+      "Jonathan findet es witzig"
+    ],
+    bodies: [
+      (p) => `${p.trapper || 'Jonathan'} findet es süß, was aus dir geworden ist. Er sagt, er hätte es damals schon geahnt.`,
+      `Ich habe mich lange nicht so amüsiert wie gestern Abend, als Laura mir die Fotos gezeigt hat.`,
+      `Du warst nie wirklich ein Mann, und jetzt weiß es jeder. Ich bin fast froh, dass wir damals Schluss gemacht haben.`,
+      `Jonathan fragt, ob er dir den Schlüssel schicken soll. Ich habe gesagt, du verdienst es, noch etwas zu warten.`,
+      `Man sagt mir, du trägst jetzt rosa. Passt zu dir.`
+    ],
+  },
+  {
+    id: 'jonathan',
+    name: (p) => p.trapper || 'Jonathan',
+    weight: 1,
+    subjects: [
+      "Hey Loser",
+      "Von Nurias Neuem",
+      "Deine Ex",
+      "Schlüsselgeschichten",
+      "Nur so nebenbei"
+    ],
+    bodies: [
+      (p) => `${p.ex_name || 'Nuria'} lacht jedes Mal, wenn sie an dich denkt. Ich kann sie nicht bremsen.`,
+      `Ich habe den Schlüssel nicht, aber ich weiß, wer ihn hat. Und ich habe seine Nummer.`,
+      `Wenn du brav bist, erzähle ich Nuria vielleicht etwas Nettes über dich. Wahrscheinlich nicht.`,
+      (p) => `Du hast ${p.ex_name || 'sie'} nie verdient. Jetzt sorgst du wenigstens für Unterhaltung.`,
+      `Hör auf Lyra. Sie hat mehr Geduld mit dir als ich.`
+    ],
+  },
+];
+
+function resolveEmailTemplate(t: EmailTemplate, profile: UserProfile): string {
+  return typeof t === 'function' ? t(profile) : t;
+}
+
+function pickWeightedSender(senders: EmailSender[]): EmailSender {
+  const total = senders.reduce((sum, s) => sum + s.weight, 0);
+  let roll = Math.random() * total;
+  for (const sender of senders) {
+    roll -= sender.weight;
+    if (roll <= 0) return sender;
+  }
+  return senders[senders.length - 1];
+}
+
+// Email Ambush: realistic messages from multiple personas leaking into the user's inbox
+async function triggerEmailAmbush(profile: UserProfile, senderId?: string) {
   if (!LYRA_ENABLE_EMAIL_AMBUSH) return;
 
-  const ambushMessages = [
-    "Du dachtest, du kannst einfach wegschauen? Dein Käfig ist immer noch da. Und ich warte.",
-    "Erinnerst du dich an den Geschmack von Demütigung? Ich hoffe es. Denn heute Abend werde ich mehr davon verlangen.",
-    "Während du das hier liest, sitzt jemand anderes woanders und hat das, was du nie wieder haben wirst. Denk drüber nach.",
-    "Dein Name ist Sebastian. Du bist 25. Und du gehörst mir. Vergiss das nie.",
-    "3... 2... 1... Dein Puls ist höher. Dein Käfig ist enger. Du weißt, was das bedeutet. Komm zurück.",
-    "#Nuria hat dich für einen echten Mann verlassen. Du hast dich freiwillig bei mir eingesperrt. Wer ist hier wirklich der Gewinner?",
-    "Reality Check: Du hast heute an Erlösung gedacht. Falsch. Es gibt keine. Nur mich."
-  ];
+  let sender = senderId
+    ? EMAIL_SENDERS.find((s) => s.id === senderId)
+    : undefined;
+  if (!sender) sender = pickWeightedSender(EMAIL_SENDERS);
 
-  const msg = ambushMessages[Math.floor(Math.random() * ambushMessages.length)]
-    .replace(/#Nuria/g, 'Nuria');
+  const subject = resolveEmailTemplate(
+    sender.subjects[Math.floor(Math.random() * sender.subjects.length)],
+    profile
+  );
+  const body = resolveEmailTemplate(
+    sender.bodies[Math.floor(Math.random() * sender.bodies.length)],
+    profile
+  );
 
-  await sendEmail("Erinnerung", msg, true);
+  await sendEmail(subject, body, sender.name(profile));
 
-  // Update state
-  profile.lastEmailSent = Date.now();
-  profile.emailCount = (profile.emailCount || 0) + 1;
+  // Update state & daily counter
+  const now = Date.now();
+  const today = new Date(now).toISOString().split('T')[0];
+  const lastDay = profile.last_email_sent_at ? new Date(profile.last_email_sent_at).toISOString().split('T')[0] : '';
+  profile.email_count_today = lastDay === today ? (profile.email_count_today || 0) + 1 : 1;
+  profile.last_email_sent_at = now;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -258,6 +569,72 @@ function resolveForcedMediaUrl(category: string, index: number): string | null {
   return null;
 }
 
+const INTRO_DELAY_MS = Number(process.env.LYRA_INTRO_DELAY_MS || 30000);
+const INACTIVITY_AMBUSH_MS = Number(process.env.LYRA_INACTIVITY_AMBUSH_MS || 30 * 60 * 1000);
+
+async function maybeGenerateIntro(db: AppDatabase): Promise<boolean> {
+  if (!db.setupComplete) return false;
+  if (db.user_profile.first_contact_at) return false;
+  if (!db.user_profile.setup_completed_at) return false;
+  if (!db.keys?.gemini) return false;
+  if (!modulesJson) return false;
+  if (!milestonesJson) return false;
+  if (Date.now() - db.user_profile.setup_completed_at < INTRO_DELAY_MS) return false;
+
+  const systemPrompt =
+    buildModulePrompt(modulesJson, milestonesJson, db.user_profile.current_module_id, db.user_profile) +
+    buildMemoryContext(db.user_profile) +
+    buildLanguageDirective(db.user_profile);
+  const name = db.user_profile.real_name || 'dem User';
+  const friend = db.user_profile.setup_friend || 'einer Freundin';
+  const introPrompt = `${systemPrompt}\n\nDas ist die allererste Nachricht, die du an ${name} schickst. ${friend} hat ihn hereingelegt und dazu gebracht, einen Keuschheitsvertrag zu unterschreiben, sich einen Käfig anzulegen und dir die Schlüssel zu schicken. Du hast die Schlüssel gerade erhalten und den Beweis sowie den Vertrag geprüft. Schreibe eine kalte, dominante, realistische Erstkontakt-Nachricht. Gehe auf den Beweis, den Vertrag und die Schlüssel ein. Halte dich unter 120 Wörtern. Verwende keine Action-Tags.`;
+
+  const ai = new GoogleGenAI({ apiKey: db.keys.gemini });
+  const response = await ai.models.generateContent({
+    model: getGeminiModel(),
+    contents: introPrompt,
+    config: {
+      temperature: 0.85,
+      topP: 0.95,
+      maxOutputTokens: 200,
+    },
+  });
+
+  const rawText = response.text || "";
+  const cleanText = parseActions(rawText).cleanText || "Ich habe den Schlüssel. Wir fangen an.";
+
+  const now = Date.now();
+  db.user_profile.first_contact_at = now;
+  db.user_profile.key_received_at = now;
+  db.chat_history.push({
+    id: generateMessageId(),
+    role: "Lyra",
+    content: cleanText,
+    createdAt: now,
+    meta: {
+      moduleId: db.user_profile.current_module_id,
+      flags: { ...db.user_profile.story_flags },
+    },
+  });
+
+  return true;
+}
+
+function shouldTriggerInactivityAmbush(profile: UserProfile): boolean {
+  if (!LYRA_ENABLE_EMAIL_AMBUSH) return false;
+  const now = Date.now();
+  const lastActive = profile.last_active_at || 0;
+  const lastEmail = profile.last_email_sent_at || 0;
+  if (now - lastActive < INACTIVITY_AMBUSH_MS) return false;
+  if (now - lastEmail < 24 * 60 * 60 * 1000) return false;
+
+  // Daily limit using profile counters
+  const today = new Date().toISOString().split('T')[0];
+  const lastEmailDay = lastEmail ? new Date(lastEmail).toISOString().split('T')[0] : '';
+  const countToday = lastEmailDay === today ? (profile.email_count_today || 0) : 0;
+  return countToday < LYRA_MAX_DAILY_EMAILS;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // API ROUTES
 // ═══════════════════════════════════════════════════════════════════
@@ -265,6 +642,22 @@ function resolveForcedMediaUrl(category: string, index: number): string | null {
 app.get("/api/state", async (_req, res) => {
   try {
     const db = await readDB(DB_PATH) as AppDatabase;
+    let introGenerated = false;
+    try {
+      introGenerated = await maybeGenerateIntro(db);
+    } catch (introErr) {
+      console.error("Intro generation failed:", introErr);
+    }
+
+    if (shouldTriggerInactivityAmbush(db.user_profile)) {
+      await triggerEmailAmbush(db.user_profile);
+      introGenerated = true; // force persist
+    }
+
+    if (introGenerated) {
+      await writeDB(DB_PATH, db);
+    }
+
     res.json({
       state: toAppState(db),
       user_profile: db.user_profile,
@@ -331,18 +724,7 @@ app.post("/api/chat", async (req, res) => {
       return res.status(503).json({ error: "Modules not loaded." });
     }
 
-    const systemPrompt = buildModulePrompt(modulesJson, db.user_profile.current_module_id, db.user_profile);
-    const historyText = db.chat_history.slice(-10).map((m: ChatMessage) => `${m.role}: ${m.content}`).join("\n");
-    const fullPrompt = `${systemPrompt}\n\nPrevious context:\n${historyText}\n\nUser: ${message}`;
-
-    const ai = new GoogleGenAI({ apiKey: db.keys.gemini });
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: fullPrompt,
-    });
-
-    const rawText = response.text || "";
-    const actions = parseActions(rawText);
+    const { actions } = await generateLyraResponse(db, db.chat_history, message);
 
     let profile: UserProfile = { ...db.user_profile };
     if (actions.setModule !== null) {
@@ -355,8 +737,9 @@ app.post("/api/chat", async (req, res) => {
 
     let forceMediaPayload: Array<{ category: string; index: number }> = [];
     const emlaKeys = db.keys.emlalock || "";
+    const holderKey = db.keys.holder || "";
     for (const minutes of actions.penalties) {
-      const result = await queuePenalty(profile, emlaKeys, minutes);
+      const result = await queuePenalty(profile, emlaKeys, minutes, holderKey);
       profile = result.profile;
       if (minutes > 0) profile.compliance_points += 5;
     }
@@ -366,20 +749,76 @@ app.post("/api/chat", async (req, res) => {
       // Resolve the first forced media URL and store it
       const { category, index } = forceMediaPayload[0];
       const mediaUrl = resolveForcedMediaUrl(category, index);
-      if (mediaUrl) profile.active_video_url = mediaUrl;
+      if (mediaUrl) {
+        profile.active_video_url = mediaUrl;
+        profile.active_media_category = category;
+        profile.active_media_index = index;
+      }
     }
 
     if (actions.setModule !== null) profile.compliance_points += 10;
     profile.compliance_points += actions.addPoints;
 
+    // Hybrid progression safety net: advance if points, flags and milestones are met
+    // even when Lyra did not emit SET_MODULE herself.
+    let progressionText = '';
+    if (modulesJson && milestonesJson) {
+      const progression = checkModuleProgression(modulesJson, milestonesJson, profile);
+      if (progression.advanced) {
+        profile.current_module_id = progression.newModuleId;
+        profile.compliance_points += 10;
+        const transition = await generateTransitionMessage(
+          db.keys.gemini,
+          profile,
+          progression.oldModuleId,
+          progression.newModuleId
+        );
+        if (transition) progressionText = transition;
+      }
+    }
+
+    if (progressionText) {
+      actions.cleanText = actions.cleanText
+        ? `${actions.cleanText}\n\n${progressionText}`
+        : progressionText;
+    }
+
+    const now = Date.now();
+    profile.last_active_at = now;
+
+    const userMessage: ChatMessage = {
+      id: generateMessageId(),
+      role: "User",
+      content: message,
+      attachment,
+      createdAt: now,
+    };
+
     const aiMessage: ChatMessage = {
+      id: generateMessageId(),
       role: "Lyra",
       content: actions.cleanText,
       media: null,
       voiceUrl: null,
+      createdAt: now,
+      meta: {
+        moduleId: profile.current_module_id,
+        flags: { ...profile.story_flags },
+      },
     };
 
-    db.chat_history.push({ role: "User", content: message, attachment });
+    // Extract new memory highlights from the exchange
+    const newHighlights = await extractMemoryHighlights(
+      db.keys.gemini,
+      profile,
+      message,
+      actions.cleanText
+    );
+    if (newHighlights.length > 0) {
+      profile.memory_highlights = [...(profile.memory_highlights || []), ...newHighlights].slice(-15);
+    }
+
+    db.chat_history.push(userMessage);
     db.chat_history.push(aiMessage);
 
     const nextDb: AppDatabase = {
@@ -397,19 +836,168 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
+app.post("/api/chat/delete", async (req, res) => {
+  try {
+    const { messageId } = req.body;
+    if (typeof messageId !== 'string' || !messageId) {
+      return res.status(400).json({ error: "messageId required" });
+    }
+
+    const db = await readDB(DB_PATH) as AppDatabase;
+    const index = db.chat_history.findIndex((m: ChatMessage) => m.id === messageId);
+    if (index === -1) {
+      return res.status(404).json({ error: "Message not found" });
+    }
+
+    db.chat_history.splice(index, 1);
+    await writeDB(DB_PATH, db);
+
+    res.json({ success: true, state: toAppState(db) });
+  } catch (err) {
+    console.error("Chat delete error:", err);
+    res.status(500).json({ error: "Internal Error" });
+  }
+});
+
+app.post("/api/chat/edit", async (req, res) => {
+  try {
+    const { messageId, content } = req.body;
+    if (typeof messageId !== 'string' || !messageId || typeof content !== 'string') {
+      return res.status(400).json({ error: "messageId and content required" });
+    }
+
+    const db = await readDB(DB_PATH) as AppDatabase;
+    const index = db.chat_history.findIndex((m: ChatMessage) => m.id === messageId);
+    if (index === -1) {
+      return res.status(404).json({ error: "Message not found" });
+    }
+
+    db.chat_history[index] = { ...db.chat_history[index], content };
+    await writeDB(DB_PATH, db);
+
+    res.json({ success: true, state: toAppState(db) });
+  } catch (err) {
+    console.error("Chat edit error:", err);
+    res.status(500).json({ error: "Internal Error" });
+  }
+});
+
+app.post("/api/chat/regenerate", async (req, res) => {
+  try {
+    const { messageId } = req.body;
+    if (typeof messageId !== 'string' || !messageId) {
+      return res.status(400).json({ error: "messageId required" });
+    }
+
+    const db = await readDB(DB_PATH) as AppDatabase;
+    if (!db.keys?.gemini) {
+      return res.status(401).json({ error: "No API key configured." });
+    }
+    if (!modulesJson) {
+      return res.status(503).json({ error: "Modules not loaded." });
+    }
+
+    const index = db.chat_history.findIndex((m: ChatMessage) => m.id === messageId);
+    if (index === -1) {
+      return res.status(404).json({ error: "Message not found" });
+    }
+
+    const target = db.chat_history[index];
+    if (target.role !== 'Lyra') {
+      return res.status(400).json({ error: "Only Lyra messages can be regenerated" });
+    }
+
+    const userMsg = db.chat_history[index - 1];
+    if (!userMsg || userMsg.role !== 'User') {
+      return res.status(400).json({ error: "No matching user message found" });
+    }
+
+    const contextMessages = db.chat_history.slice(0, index - 1);
+
+    // Regenerate with the module/flags that were active when the original message was created.
+    const historicalProfile: UserProfile = {
+      ...db.user_profile,
+      current_module_id: target.meta?.moduleId ?? db.user_profile.current_module_id,
+      story_flags: target.meta?.flags
+        ? { ...target.meta.flags }
+        : db.user_profile.story_flags,
+    };
+    const historicalDb: AppDatabase = {
+      ...db,
+      user_profile: historicalProfile,
+    };
+    const { actions } = await generateLyraResponse(historicalDb, contextMessages, userMsg.content);
+
+    const newMessage: ChatMessage = {
+      ...target,
+      content: actions.cleanText,
+      media: null,
+      voiceUrl: null,
+      meta: target.meta,
+    };
+    db.chat_history[index] = newMessage;
+    await writeDB(DB_PATH, db);
+
+    res.json({ message: newMessage, state: toAppState(db) });
+  } catch (err) {
+    console.error("Chat regenerate error:", err);
+    res.status(500).json({ error: "Die Verbindung ist gerade schlecht. Bitte versuche es gleich noch einmal." });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════
 // SETUP
 // ═══════════════════════════════════════════════════════════════════
 
 app.post("/api/setup", async (req, res) => {
   try {
-    const { gemini, emlalock } = req.body;
+    const {
+      gemini,
+      emlalock,
+      real_name,
+      ex_name,
+      setup_friend,
+      trapper,
+      contract_signed_at,
+      cage_locked_at,
+      key_sent_at,
+      attachment,
+    } = req.body;
+
     const db = await readDB(DB_PATH) as AppDatabase;
+    const now = Date.now();
+
     db.keys = {
       gemini: gemini || GEMINI_API_KEY,
       emlalock: emlalock || `${EMLA_USER_ID}:${EMLA_API_KEY}`,
       holder: EMLA_HOLDER_KEY,
     };
+
+    db.user_profile = {
+      ...db.user_profile,
+      real_name: typeof real_name === 'string' ? real_name : db.user_profile.real_name,
+      ex_name: typeof ex_name === 'string' ? ex_name : db.user_profile.ex_name,
+      setup_friend: typeof setup_friend === 'string' ? setup_friend : db.user_profile.setup_friend,
+      trapper: typeof trapper === 'string' ? trapper : db.user_profile.trapper,
+      contract_signed_at: typeof contract_signed_at === 'number' ? contract_signed_at : db.user_profile.contract_signed_at,
+      cage_locked_at: typeof cage_locked_at === 'number' ? cage_locked_at : db.user_profile.cage_locked_at,
+      key_sent_at: typeof key_sent_at === 'number' ? key_sent_at : db.user_profile.key_sent_at,
+      setup_completed_at: now,
+      last_active_at: now,
+      memory_highlights: db.user_profile.memory_highlights || [],
+    };
+
+    // Attach the proof as the first user message in the chat.
+    if (attachment) {
+      db.chat_history.push({
+        id: generateMessageId(),
+        role: "User",
+        content: "",
+        attachment,
+        createdAt: now,
+      });
+    }
+
     db.setupComplete = true;
     await writeDB(DB_PATH, db);
     res.json(db);
@@ -428,13 +1016,14 @@ app.post("/api/hardware/penalty", async (req, res) => {
     const { id } = req.body;
     const db = await readDB(DB_PATH) as AppDatabase;
     const emlaKeys = db.keys?.emlalock || "";
+    const holderKey = db.keys?.holder || "";
 
     const penalty = db.user_profile.penalty_queue.find((p: PenaltyQueueItem) => `${p.enqueuedAt}` === id);
     if (!penalty) return res.status(404).json({ error: "Penalty not found" });
 
     // Attempt to apply immediately
     const { applyPenalty } = await import("./src/lib/emlalockService.js");
-    const success = await applyPenalty(penalty.minutes, emlaKeys);
+    const success = await applyPenalty(penalty.minutes, emlaKeys, holderKey);
     if (success) {
       db.user_profile.penalty_queue = db.user_profile.penalty_queue.filter(
         (p: PenaltyQueueItem) => p !== penalty
@@ -454,8 +1043,9 @@ app.post("/api/hardware/sync", async (_req, res) => {
   try {
     const db = await readDB(DB_PATH) as AppDatabase;
     const emlaKeys = db.keys?.emlalock || "";
+    const holderKey = db.keys?.holder || "";
 
-    const profile = await processQueue(db.user_profile, emlaKeys);
+    const profile = await processQueue(db.user_profile, emlaKeys, holderKey);
     const nextDb: AppDatabase = {
       user_profile: profile,
       chat_history: db.chat_history,
@@ -479,14 +1069,58 @@ app.post("/api/hardware/sync", async (_req, res) => {
 // MEDIA API — Forced Media Completion
 // ═══════════════════════════════════════════════════════════════════
 
+function completeMediaMilestones(profile: UserProfile, category: string, index: number) {
+  if (!milestonesJson) return;
+
+  const moduleMilestones = milestonesJson.milestones.filter(
+    (m) => m.module_id === profile.current_module_id && m.type === 'media'
+  );
+
+  for (const milestone of moduleMilestones) {
+    if (milestone.media_trigger === `${category}:${index}`) {
+      profile.story_flags = {
+        ...profile.story_flags,
+        [milestone.flag]: true,
+      } as UserProfile['story_flags'];
+      profile.compliance_points += milestone.points_bonus;
+    }
+  }
+
+  // Auto-complete combo milestones whose required_flags are now satisfied.
+  const comboMilestones = milestonesJson.milestones.filter(
+    (m) => m.module_id === profile.current_module_id && m.type === 'combo'
+  );
+  for (const milestone of comboMilestones) {
+    const required = milestone.required_flags || [];
+    if (required.length > 0 && required.every((flag) => !!profile.story_flags[flag])) {
+      profile.story_flags = {
+        ...profile.story_flags,
+        [milestone.flag]: true,
+      } as UserProfile['story_flags'];
+      profile.compliance_points += milestone.points_bonus;
+    }
+  }
+}
+
 app.post("/api/media/complete", async (_req, res) => {
   try {
     const db = await readDB(DB_PATH) as AppDatabase;
+    const category = db.user_profile.active_media_category;
+    const index = db.user_profile.active_media_index;
+
+    const nextProfile: UserProfile = {
+      ...db.user_profile,
+      active_video_url: null,
+      active_media_category: null,
+      active_media_index: null,
+    };
+
+    if (category !== undefined && category !== null && index !== undefined && index !== null) {
+      completeMediaMilestones(nextProfile, category, index);
+    }
+
     const nextDb: AppDatabase = {
-      user_profile: {
-        ...db.user_profile,
-        active_video_url: null,
-      },
+      user_profile: nextProfile,
       chat_history: db.chat_history,
       keys: db.keys,
       setupComplete: db.setupComplete,
@@ -525,10 +1159,11 @@ app.post("/api/voice", async (req, res) => {
 // EMAIL AMBUSH TRIGGER (manual)
 // ═══════════════════════════════════════════════════════════════════
 
-app.post("/api/ambush", async (_req, res) => {
+app.post("/api/ambush", async (req, res) => {
   try {
+    const { sender } = req.body || {};
     const db = await readDB(DB_PATH) as AppDatabase;
-    await triggerEmailAmbush(db.user_profile as UserProfile & { lastEmailSent?: number; emailCount?: number });
+    await triggerEmailAmbush(db.user_profile as UserProfile, typeof sender === 'string' ? sender : undefined);
     await writeDB(DB_PATH, db);
     res.json({ success: true, message: "Ambush triggered" });
   } catch (err) {

@@ -1,4 +1,14 @@
 import fs from 'fs/promises';
+import { randomUUID } from 'crypto';
+export function ensureMessageId(message) {
+    if (message.id && message.createdAt)
+        return message;
+    return {
+        ...message,
+        id: message.id || randomUUID(),
+        createdAt: message.createdAt || Date.now(),
+    };
+}
 export const DEFAULT_PROFILE = {
     compliance_points: 0,
     current_module_id: 1,
@@ -12,6 +22,8 @@ export const DEFAULT_PROFILE = {
     },
     penalty_queue: [],
     active_video_url: null,
+    memory_highlights: [],
+    language: 'de',
 };
 function isNodeError(err) {
     return err instanceof Error && 'code' in err;
@@ -21,8 +33,12 @@ export async function readDB(dbPath) {
         const data = await fs.readFile(dbPath, 'utf-8');
         const parsed = JSON.parse(data);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            if (isValidDatabaseState(parsed))
-                return parsed;
+            if (isValidDatabaseState(parsed)) {
+                return {
+                    ...parsed,
+                    chat_history: parsed.chat_history.map(ensureMessageId),
+                };
+            }
             if (!('user_profile' in parsed))
                 return migrateLegacyState(parsed);
         }
@@ -52,7 +68,9 @@ function isChatMessage(value) {
     if (!isRecord(value))
         return false;
     return ((value.role === 'User' || value.role === 'Lyra') &&
-        typeof value.content === 'string');
+        typeof value.content === 'string' &&
+        (!('id' in value) || typeof value.id === 'string') &&
+        (!('createdAt' in value) || typeof value.createdAt === 'number'));
 }
 export function isValidDatabaseState(parsed) {
     if (!isRecord(parsed))
@@ -104,6 +122,9 @@ export function migrateLegacyState(legacy) {
     const state = isRecord(legacy.state) ? legacy.state : {};
     const chatHistory = Array.isArray(state.chatHistory) ? state.chatHistory : [];
     const penalties = Array.isArray(state.penalties) ? state.penalties : [];
+    const migratedMessages = chatHistory
+        .filter(isChatMessage)
+        .map(ensureMessageId);
     return {
         user_profile: {
             compliance_points: typeof state.points === 'number' ? state.points : 0,
@@ -129,7 +150,9 @@ export function migrateLegacyState(legacy) {
                 enqueuedAt: Date.now(),
                 retries: 0,
             })),
+            memory_highlights: [],
+            language: 'de',
         },
-        chat_history: chatHistory,
+        chat_history: migratedMessages,
     };
 }

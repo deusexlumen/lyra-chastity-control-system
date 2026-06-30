@@ -9,26 +9,17 @@ export interface Penalty {
 }
 
 /**
- * Legacy app state. Kept during migration to UserProfile.
- * TODO: Remove once frontend fully uses user_profile.
+ * Minimal frontend app state. The backend no longer exposes game mechanics
+ * (points, phases, cycles) to the UI.
  */
 export interface AppState {
-  module: number;
-  points: number;
   chatHistory: ChatMessage[];
   penalties: Penalty[];
   activeVideoUrl?: string | null;
-  userName?: string;
-  daysDenied?: number;
+  activeMediaCategory?: string | null;
+  activeMediaIndex?: number | null;
   chastityStatus?: string;
-  sissyLevel?: number;
-  obedienceScore?: number;
-  currentPhase?: number;
-  loopCycle?: number;
-  tagesform?: string;
-  contentFingerprint?: string[];
-  lastUsedAt?: Record<string, number>;
-  messageIndex?: number;
+  pendingMilestones?: string[];
 }
 
 export interface SetupState {

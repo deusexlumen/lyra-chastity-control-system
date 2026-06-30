@@ -22,7 +22,7 @@ describe('emlalockService', () => {
   it('queues a penalty when API fails', async () => {
     const profile = baseProfile();
 
-    const result = await queuePenalty(profile, 'user:pass', 60, async () => {
+    const result = await queuePenalty(profile, 'user:pass', 60, undefined, async () => {
       throw new Error('timeout');
     });
 
@@ -33,7 +33,7 @@ describe('emlalockService', () => {
 
   it('does not queue a penalty on success', async () => {
     const profile = baseProfile();
-    const result = await queuePenalty(profile, 'user:pass', 60, mockFetch(true));
+    const result = await queuePenalty(profile, 'user:pass', 60, undefined, mockFetch(true));
 
     assert.equal(result.success, true);
     assert.equal(result.profile.penalty_queue.length, 0);
@@ -43,47 +43,75 @@ describe('emlalockService', () => {
     const profile = baseProfile([{ minutes: 30, enqueuedAt: Date.now(), retries: 0 }]);
 
     let calls = 0;
-    const result = await processQueue(profile, 'user:pass', async () => {
+    const result = await processQueue(profile, 'user:pass', undefined, async () => {
       calls++;
       return { ok: true, json: async () => ({}) };
     });
 
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
     assert.equal(result.penalty_queue.length, 0);
   });
 
-  it('applies positive penalties (addrandom) with seconds', async () => {
-    let url = '';
-    const result = await applyPenalty(60, 'user:pass', async (u) => {
-      url = u;
+  it('applies positive penalties by adding duration and maximum time', async () => {
+    const urls: string[] = [];
+    const result = await applyPenalty(60, 'user:pass', undefined, async (u) => {
+      urls.push(u);
       return { ok: true, json: async () => ({}) };
     });
 
     assert.equal(result, true);
-    assert.ok(url.includes('addrandom'));
-    assert.ok(url.includes('from=3600'));
-    assert.ok(url.includes('to=3600'));
+    assert.equal(urls.length, 2);
+    assert.ok(urls[0].includes('addrandom'));
+    assert.ok(urls[0].includes('from=3600'));
+    assert.ok(urls[0].includes('to=3600'));
+    assert.ok(urls[1].includes('addmaximum'));
+    assert.ok(urls[1].includes('value=3600'));
   });
 
-  it('applies negative penalties (time reduction)', async () => {
+  it('returns false when maximum-time call fails', async () => {
+    let call = 0;
+    const result = await applyPenalty(10, 'user:pass', undefined, async () => {
+      call++;
+      return call === 1
+        ? { ok: true, json: async () => ({}) }
+        : { ok: false, json: async () => ({}) };
+    });
+
+    assert.equal(result, false);
+    assert.equal(call, 2);
+  });
+
+  it('applies negative penalties via /sub with holder key', async () => {
     let url = '';
-    const result = await applyPenalty(-120, 'user:pass', async (u) => {
+    const result = await applyPenalty(-120, 'user:pass', 'holder123', async (u) => {
       url = u;
       return { ok: true, json: async () => ({}) };
     });
 
     assert.equal(result, true);
-    assert.ok(url.includes('removesessiontime'));
-    assert.ok(url.includes('from=7200'));
+    assert.ok(url.includes('/sub'));
+    assert.ok(url.includes('holderapikey=holder123'));
+    assert.ok(url.includes('value=7200'));
+  });
+
+  it('returns false for negative penalties without holder key', async () => {
+    let calls = 0;
+    const result = await applyPenalty(-30, 'user:pass', undefined, async () => {
+      calls++;
+      return { ok: true, json: async () => ({}) };
+    });
+
+    assert.equal(result, false);
+    assert.equal(calls, 0);
   });
 
   it('returns false when API response body contains an error', async () => {
-    const result = await applyPenalty(30, 'user:pass', mockFetch(true, { error: 'invalid api key' }));
+    const result = await applyPenalty(30, 'user:pass', undefined, mockFetch(true, { error: 'invalid api key' }));
     assert.equal(result, false);
   });
 
   it('returns false for invalid keys', async () => {
-    const result = await applyPenalty(30, 'invalid', mockFetch(true));
+    const result = await applyPenalty(30, 'invalid', undefined, mockFetch(true));
     assert.equal(result, false);
   });
 
@@ -98,7 +126,7 @@ describe('emlalockService', () => {
 
   it('URL-encodes special characters in credentials', async () => {
     let url = '';
-    await applyPenalty(10, 'us er:pa@ss#', async (u) => {
+    await applyPenalty(10, 'us er:pa@ss#', undefined, async (u) => {
       url = u;
       return { ok: true, json: async () => ({}) };
     });
@@ -129,9 +157,12 @@ describe('emlalockService', () => {
     ]);
 
     let call = 0;
-    const result = await processQueue(profile, 'user:pass', async () => {
+    const result = await processQueue(profile, 'user:pass', undefined, async () => {
       call++;
-      return call === 2 ? { ok: true, json: async () => ({}) } : { ok: false, json: async () => ({}) };
+      // Nur der zweite Queue-Eintrag (20 Min) muss beide Calls erfolgreich abschließen.
+      return call === 2 || call === 3
+        ? { ok: true, json: async () => ({}) }
+        : { ok: false, json: async () => ({}) };
     });
 
     assert.equal(result.penalty_queue.length, 2);
@@ -141,7 +172,7 @@ describe('emlalockService', () => {
 
   it('increments retries on queue failure', async () => {
     const profile = baseProfile([{ minutes: 15, enqueuedAt: Date.now(), retries: 0 }]);
-    const result = await processQueue(profile, 'user:pass', mockFetch(false));
+    const result = await processQueue(profile, 'user:pass', undefined, mockFetch(false));
 
     assert.equal(result.penalty_queue.length, 1);
     assert.equal(result.penalty_queue[0].retries, 1);
@@ -149,7 +180,7 @@ describe('emlalockService', () => {
 
   it('returns false for zero-minute penalties without calling fetch', async () => {
     let calls = 0;
-    const result = await applyPenalty(0, 'user:pass', async () => {
+    const result = await applyPenalty(0, 'user:pass', undefined, async () => {
       calls++;
       return { ok: true, json: async () => ({}) };
     });
@@ -164,7 +195,7 @@ describe('emlalockService', () => {
       { minutes: 10, enqueuedAt: Date.now(), retries: 99 },
     ]);
 
-    const result = await processQueue(profile, 'user:pass', mockFetch(false));
+    const result = await processQueue(profile, 'user:pass', undefined, mockFetch(false));
 
     assert.equal(result.penalty_queue.length, 2);
     assert.equal(result.penalty_queue[0].minutes, 5);
@@ -180,7 +211,7 @@ describe('emlalockService', () => {
     ]);
 
     let calls = 0;
-    const result = await processQueue(profile, 'user:pass', async () => {
+    const result = await processQueue(profile, 'user:pass', undefined, async () => {
       calls++;
       return { ok: false, json: async () => ({}) };
     });

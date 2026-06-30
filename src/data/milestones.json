@@ -1,0 +1,79 @@
+{
+  "milestones": [
+    {
+      "id": "proof_cage_nuria",
+      "title": "Verschlossener Käfig für Nuria",
+      "description": "Ein Foto des verschlossenen Käfigs, auf dem ein Zettel mit 'Nuria' zu sehen ist.",
+      "type": "photo",
+      "module_id": 5,
+      "flag": "proof_cage_nuria_submitted",
+      "points_bonus": 20
+    },
+    {
+      "id": "hypno_sissy_1",
+      "title": "Sissy-Hypno Session 1",
+      "description": "Schau dir das erste Sissy-Hypno-Video bis zum Ende an.",
+      "type": "media",
+      "module_id": 7,
+      "flag": "hypno_sissy_1_completed",
+      "media_trigger": "sissy_hypno:1",
+      "points_bonus": 10
+    },
+    {
+      "id": "proof_bj_training",
+      "title": "Blowjob-Training",
+      "description": "Ein Foto oder kurzes Video vom Blowjob-Training mit dem Dildo.",
+      "type": "photo",
+      "module_id": 9,
+      "flag": "proof_bj_training_submitted",
+      "points_bonus": 20
+    },
+    {
+      "id": "proof_anal_training",
+      "title": "Anal-Training",
+      "description": "Ein Foto vom Anal-Training mit dem Plug oder der vorgegebenen Übung.",
+      "type": "photo",
+      "module_id": 10,
+      "flag": "proof_anal_training_submitted",
+      "points_bonus": 20
+    },
+    {
+      "id": "proof_panties",
+      "title": "Slip-Beweis",
+      "description": "Ein Foto, auf dem du den vorgegebenen Slip oder die feminine Wäsche trägst.",
+      "type": "photo",
+      "module_id": 11,
+      "flag": "proof_panties_submitted",
+      "points_bonus": 15
+    },
+    {
+      "id": "proof_bodywriting",
+      "title": "Körperbeschriftung",
+      "description": "Ein Foto deines Körpers mit der von Lyra vorgegebenen Beschriftung.",
+      "type": "photo",
+      "module_id": 12,
+      "flag": "proof_bodywriting_submitted",
+      "points_bonus": 20
+    },
+    {
+      "id": "hypno_forced_bi_1",
+      "title": "Forced-Bi Hypno",
+      "description": "Schau dir das Forced-Bi-Video-Roulette bis zum Ende an.",
+      "type": "media",
+      "module_id": 13,
+      "flag": "hypno_forced_bi_1_completed",
+      "media_trigger": "sissy_hypno:4",
+      "points_bonus": 10
+    },
+    {
+      "id": "combo_daily_sissy",
+      "title": "Tägliche Sissy-Kombination",
+      "description": "Trage den Slip UND schau dir das Sissy-Hypno-Video bis zum Ende an.",
+      "type": "combo",
+      "module_id": 11,
+      "flag": "combo_daily_sissy_completed",
+      "required_flags": ["proof_panties_submitted", "hypno_sissy_1_completed"],
+      "points_bonus": 25
+    }
+  ]
+}

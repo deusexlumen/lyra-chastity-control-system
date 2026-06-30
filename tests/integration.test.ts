@@ -53,7 +53,7 @@ describe('V3.1 integration scenarios', () => {
       throw new Error('timeout');
     };
 
-    const result = await queuePenalty(profile, 'user:key', actions.penalties[0], failingFetch);
+    const result = await queuePenalty(profile, 'user:key', actions.penalties[0], undefined, failingFetch);
     assert.equal(result.success, false);
     assert.equal(result.profile.penalty_queue.length, 1);
     assert.equal(result.profile.penalty_queue[0].minutes, 60);
@@ -68,16 +68,18 @@ describe('V3.1 integration scenarios', () => {
     assert.deepEqual(actions.penalties, [360]);
 
     const capturedUrls: string[] = [];
-    const mockFetch: Parameters<typeof applyPenalty>[2] = async (url) => {
+    const mockFetch: Parameters<typeof applyPenalty>[3] = async (url) => {
       capturedUrls.push(url);
       return { ok: true, json: async () => ({}) };
     };
 
-    const success = await applyPenalty(actions.penalties[0], 'tdhml0y4aw8ru8o:3c5ldeqqsh', mockFetch);
+    const success = await applyPenalty(actions.penalties[0], 'tdhml0y4aw8ru8o:3c5ldeqqsh', undefined, mockFetch);
     assert.equal(success, true);
-    assert.equal(capturedUrls.length, 1);
+    assert.equal(capturedUrls.length, 2);
     assert.match(capturedUrls[0], /api\.emlalock\.com\/addrandom/);
     assert.match(capturedUrls[0], /from=21600/);
     assert.match(capturedUrls[0], /to=21600/);
+    assert.match(capturedUrls[1], /api\.emlalock\.com\/addmaximum/);
+    assert.match(capturedUrls[1], /value=21600/);
   });
 });

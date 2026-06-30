@@ -45,13 +45,29 @@ export function getModules() {
 export function getModuleById(modules, id) {
     return modules.modules.find((m) => m.id === id);
 }
+export function checkModuleProgression(modules, profile) {
+    const current = getModuleById(modules, profile.current_module_id);
+    const next = getModuleById(modules, profile.current_module_id + 1);
+    if (!current || !next)
+        return { advanced: false };
+    const requiredFlags = current.completion_flags || [];
+    const flagsMet = requiredFlags.every((flag) => !!profile.story_flags[flag]);
+    const pointsMet = profile.compliance_points >= next.requirementPoints;
+    if (!flagsMet || !pointsMet)
+        return { advanced: false };
+    return { advanced: true, oldModuleId: current.id, newModuleId: next.id };
+}
 export function buildModulePrompt(modules, moduleId, profile) {
     const mod = getModuleById(modules, moduleId);
     if (!mod)
         throw new Error(`Module ${moduleId} not found`);
     const base = modules.global_directives?.tone || '';
     const prompt = mod.ai_prompt;
-    return `${base}\n\n${prompt}`
+    const nextMod = modules.modules.find((m) => m.id === mod.id + 1);
+    const moduleContext = `Du befindest dich im Modul "${mod.title}" (ID ${mod.id}, Anforderung: ${mod.requirementPoints} Punkte).${nextMod
+        ? ` Das nächste Modul ist "${nextMod.title}" (ab ${nextMod.requirementPoints} Punkten).`
+        : ' Dies ist das letzte Modul.'}`;
+    return `${base}\n\n${moduleContext}\n\n${prompt}`
         .replace(/\{compliance_points\}/g, String(profile.compliance_points))
         .replace(/\{current_module_id\}/g, String(profile.current_module_id))
         .replace(/\{lock_status\}/g, profile.lock_status)

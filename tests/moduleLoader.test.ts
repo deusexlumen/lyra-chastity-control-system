@@ -10,7 +10,7 @@ import {
   getModuleById,
   buildModulePrompt,
 } from '../src/lib/moduleLoader.js';
-import type { ModulesJson, UserProfile } from '../src/types/engine.js';
+import type { ModulesJson, UserProfile, MilestonesJson } from '../src/types/engine.js';
 
 const sample: ModulesJson = {
   global_directives: { tone: 'You are Lyra.' },
@@ -28,6 +28,8 @@ const baseProfile: UserProfile = {
   story_flags: {},
   penalty_queue: [],
 };
+
+const emptyMilestones: MilestonesJson = { milestones: [] };
 
 describe('moduleLoader', () => {
   it('throws when getModules is called before loadModules', () => {
@@ -68,7 +70,7 @@ describe('moduleLoader', () => {
       ...baseProfile,
       story_flags: { nuria_trauma_score: 5 },
     };
-    const prompt = buildModulePrompt(sample, 1, profile);
+    const prompt = buildModulePrompt(sample, emptyMilestones, 1, profile);
     assert.ok(prompt.includes('You are Lyra.'));
     assert.ok(prompt.includes('Beginne...'));
     assert.ok(prompt.includes('10'));
@@ -80,13 +82,13 @@ describe('moduleLoader', () => {
       current_module_id: 2,
       story_flags: { nuria_trauma_score: 5 },
     };
-    const prompt = buildModulePrompt(sample, 2, profile);
+    const prompt = buildModulePrompt(sample, emptyMilestones, 2, profile);
     assert.ok(prompt.includes('5'));
   });
 
   it('throws when module id is not found for prompt building', () => {
     const profile: UserProfile = { ...baseProfile };
-    assert.throws(() => buildModulePrompt(sample, 99, profile), /Module 99 not found/);
+    assert.throws(() => buildModulePrompt(sample, emptyMilestones, 99, profile), /Module 99 not found/);
   });
 
   it('builds a prompt without tone when global_directives.tone is absent', () => {
@@ -96,7 +98,7 @@ describe('moduleLoader', () => {
         { id: 1, title: 'Intake', requirementPoints: 0, ai_prompt: 'Prompt text.' },
       ],
     };
-    const prompt = buildModulePrompt(modulesWithoutTone, 1, baseProfile);
+    const prompt = buildModulePrompt(modulesWithoutTone, emptyMilestones, 1, baseProfile);
     assert.ok(!prompt.includes('You are Lyra.'));
     assert.ok(prompt.includes('Prompt text.'));
     assert.equal(prompt.startsWith('\n\n'), true);
@@ -113,7 +115,7 @@ describe('moduleLoader', () => {
         },
       ],
     };
-    const prompt = buildModulePrompt(modulesWithMissingFlag, 1, baseProfile);
+    const prompt = buildModulePrompt(modulesWithMissingFlag, emptyMilestones, 1, baseProfile);
     assert.ok(prompt.includes('Value: []'));
     assert.ok(!prompt.includes('flag:missing'));
   });
