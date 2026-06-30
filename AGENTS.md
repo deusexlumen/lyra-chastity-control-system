@@ -178,7 +178,7 @@ State is persisted in `local_db.json` at the project root. The V3 schema is cent
 
 - `src/App.tsx`: Root component. Fetches state, renders onboarding, waiting screen, or messenger UI, handles optimistic chat updates, penalty dispatch, forced media completion, and chat-message management callbacks.
 - `src/components/Chat.tsx`: Messenger-style chat history with timestamps, read receipts, file attachments (base64), inline media, per-Lyra-message edit/delete/regenerate actions, and on-demand voice synthesis.
-- `src/components/Onboarding.tsx`: Narrative multi-step setup collecting personal anchors (names, contract/key dates), a cage proof photo, and API keys. The API-key fields are pre-filled from `/api/defaults` (resolved server fallbacks) and can be left empty to use those defaults.
+- `src/components/Onboarding.tsx`: Narrative multi-step setup collecting personal anchors (names, contract/key dates), a cage proof photo, and API keys. The API-key fields are pre-filled from `/api/defaults`, which intentionally returns empty strings for secrets; keys must be supplied via `.env` or entered during setup.
 - `src/components/PenaltyDispatcher.tsx`: Lists pending/success/error Emlalock penalties (currently unused in the main UI but kept for reuse).
 - `src/components/ForcedMediaOverlay.tsx`: Full-screen media overlay for forced videos and images.
 
@@ -189,7 +189,7 @@ State is persisted in `local_db.json` at the project root. The V3 schema is cent
 - `src/lib/actionParser.ts`: Parses `[ACTION: SET_MODULE=...]`, `[ACTION: SET_FLAG=...]`, `[ACTION: PENALTY_MINUTES=...]`, `[ACTION: ADD_POINTS=...]`, and `[ACTION: FORCE_MEDIA=category:index]` tags from AI responses.
 - `src/lib/stateManager.ts`: Reads/writes `local_db.json`, validates schema, initializes defaults, and migrates legacy states.
 - `src/lib/moduleLoader.ts`: Loads `modules.json` and `milestones.json`, validates both schemas, caches them, builds per-module system prompts with variable substitution (`{compliance_points}`, `{flag:...}`), injects milestone context, and provides `checkModuleProgression()` for hybrid progression.
-- `src/lib/emlalockService.ts`: Communicates with the Emlalock API (`addrandom` / `removesessiontime`), queues failed penalties, and retries queued penalties.
+- `src/lib/emlalockService.ts`: Communicates with the Emlalock API (`/addrandom` + `/addmaximum` for positive penalties, `/sub` for negative penalties), queues failed penalties, and retries queued penalties.
 - `src/types/engine.ts` and `src/types/types.ts`: Shared TypeScript interfaces. `engine.ts` is the canonical V3 DB/model shape; `types.ts` adds the legacy `AppState`/`SetupState` shapes still used by the frontend.
 
 ## Code Style Guidelines
@@ -230,21 +230,21 @@ If you add new tests, place them in `tests/` or `src/__tests__/` and wire them t
 
 ## Security Considerations
 
-> **Critical:** This codebase contains hard-coded API keys and credentials in `server.ts` (Gemini, Emlalock, SMTP). These are committed to the repository and must be rotated immediately if the repository is shared or made public.
+> **Critical:** `server.ts` no longer contains hard-coded API keys or credentials. All secrets must be supplied via environment variables (`.env` file or `ENV_PATH`).
 
-- `server.ts` uses `process.env.*` fallbacks but still has defaults baked in.
-- New environment variables control the realism pacing: `LYRA_INTRO_DELAY_MS` (default 30000) and `LYRA_INACTIVITY_AMBUSH_MS` (default 1800000).
+- `.env` and `local_db.json` are listed in `.gitignore` and must never be committed.
+- `dist-server/` is excluded from version control; build it locally from `server.ts` when needed.
+- The `/api/defaults` endpoint returns empty strings for secrets so they are not leaked to the frontend.
 - `local_db.json` stores keys and state locally without encryption.
-- The application calls third-party services (Gemini, Emlalock, GMX SMTP, an external NGrok voice endpoint) with user-provided or hard-coded credentials.
+- The application calls third-party services (Gemini, Emlalock, GMX SMTP, an external voice endpoint) with credentials from environment variables or user input.
 - No input sanitization beyond JSON parsing is performed on user messages; the prompt is sent directly to the Gemini API.
 - No authentication or session isolation is implemented; any caller with access to the local server can read or mutate state.
 
 **Before any production deployment, you should:**
 
-1. Remove all hard-coded secrets from `server.ts` and rely solely on environment variables.
-2. Add an `.env` file (and ensure it is in `.gitignore`) for `GEMINI_API_KEY`, `EMLA_USER_ID`, `EMLA_API_KEY`, `SMTP_USER`, `SMTP_PASSWORD`, `LYRA_INTRO_DELAY_MS`, `LYRA_INACTIVITY_AMBUSH_MS`, etc. See `.env.example` for the full set of variables.
-3. Rotate all exposed credentials.
-4. Consider adding request validation, rate limiting, and authentication.
+1. Keep secrets in `.env` and verify `.env` / `local_db.json` / `dist-server/` are in `.gitignore`.
+2. Rotate any credentials that were previously hard-coded or committed.
+3. Consider adding request validation, rate limiting, and authentication.
 
 ## Deployment Notes
 

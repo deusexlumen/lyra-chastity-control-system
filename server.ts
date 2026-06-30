@@ -58,40 +58,41 @@ const PORT = 3000;
 app.use(express.json());
 
 // ═══════════════════════════════════════════════════════════════════
-// ENVIRONMENT-BASED CONFIG — V2.2 Reality Bleed Configuration
-// Hard-coded values remain as fallbacks for backward compatibility.
+// ENVIRONMENT-BASED CONFIG
+// Alle Secrets müssen über .env oder Umgebungsvariablen geladen werden.
+// Hartcodierte Fallbacks für Secrets wurden entfernt.
 // ═══════════════════════════════════════════════════════════════════
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyAJeIFMY5DnBRkSmq_ByQE2iCjxbmAavP8";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 
 // Emlalock API
-const EMLA_USER_ID = process.env.EMLA_USER_ID || "tdhml0y4aw8ru8o";
-const EMLA_API_KEY = process.env.EMLA_API_KEY || "3c5ldeqqsh";
-const EMLA_HOLDER_KEY = process.env.EMLA_HOLDER_KEY || "moy0pjkjgg";
+const EMLA_USER_ID = process.env.EMLA_USER_ID || "";
+const EMLA_API_KEY = process.env.EMLA_API_KEY || "";
+const EMLA_HOLDER_KEY = process.env.EMLA_HOLDER_KEY || "";
 
 // V2.2: GMX Email Bridge
 const SMTP_HOST = process.env.SMTP_HOST || "mail.gmx.net";
 const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
-const SMTP_USER = process.env.SMTP_USER || "elara.vance@gmx.net";
-const SMTP_PASSWORD = process.env.SMTP_PASSWORD || "4UV2TUQ4PBC45YJFBWBA";
-const LYRA_USER_EMAIL = process.env.LYRA_USER_EMAIL || "buxloh@gmail.com";
+const SMTP_USER = process.env.SMTP_USER || "";
+const SMTP_PASSWORD = process.env.SMTP_PASSWORD || "";
+const LYRA_USER_EMAIL = process.env.LYRA_USER_EMAIL || "";
 const LYRA_ENABLE_EMAIL_BRIDGE = (process.env.LYRA_ENABLE_EMAIL_BRIDGE || "true") === "true";
 const LYRA_ENABLE_EMAIL_AMBUSH = (process.env.LYRA_ENABLE_EMAIL_AMBUSH || "true") === "true";
 const LYRA_MAX_DAILY_EMAILS = Number(process.env.LYRA_MAX_DAILY_EMAILS || 3);
 
 // Colab Voice Endpoint
-const COLAB_VOICE_URL = process.env.COLAB_VOICE_URL || "https://parakeet-unrest-cane.ngrok-free.dev";
+const COLAB_VOICE_URL = process.env.COLAB_VOICE_URL || "";
 
 // ═══════════════════════════════════════════════════════════════════
 // DEFAULTS ENDPOINT
-// Returns the resolved default credentials so the onboarding UI can
-// pre-fill the API-key fields when no custom keys are configured.
+// Liefert keine Secrets mehr aus. Die Onboarding-Felder bleiben leer,
+// damit der Nutzer seine eigenen Keys eingeben oder .env nutzen kann.
 // ═══════════════════════════════════════════════════════════════════
 
 app.get("/api/defaults", (_req, res) => {
   res.json({
-    gemini: GEMINI_API_KEY,
-    emlalock: `${EMLA_USER_ID}:${EMLA_API_KEY}`,
+    gemini: "",
+    emlalock: "",
   });
 });
 

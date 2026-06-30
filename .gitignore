@@ -25,3 +25,12 @@ dist-ssr
 
 # Worktrees
 .worktrees
+
+# Environment and local state
+.env
+.env.local
+local_db.json
+
+# Compiled server output (source of truth is server.ts / sessionEngine.ts)
+dist-server
+
